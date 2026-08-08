@@ -5,7 +5,7 @@ UV_ENV_DIR = .venv
 UV_PYTHON = $(UV_ENV_DIR)/bin/python
 NODE_MODULES = node_modules
 
-.PHONY: help install install-python install-node venv clean-venv clean clean-all clean-cache run run-clean test demo lint lint-fix ci verify-openclaw verify-openclaw-ci check-venv python-info kindle7 kindle-paperwhite kindle-oasis kindle-scribe kindle-all reset-config list-configs clean-kindle docs-openai docs-claude docs-openclaw docs-cloudflare docs-anthropic docs-53ai docs-claude-blog docs-current
+.PHONY: help install install-python install-node venv clean-venv clean clean-all clean-cache run run-clean test lint lint-fix ci verify-openclaw verify-openclaw-ci check-venv python-info kindle7 kindle-paperwhite kindle-oasis kindle-scribe kindle-all reset-config list-configs clean-kindle docs-openai docs-claude docs-openclaw docs-cloudflare docs-anthropic docs-53ai docs-claude-blog docs-current
 
 help:
 	@echo "Available commands:"
@@ -100,11 +100,6 @@ run-clean:
 test:
 	@echo "Running tests..."
 	npm test
-
-# Run demo
-demo:
-	@echo "Running demo..."
-	npm run test:demo
 
 # Run linter
 lint:

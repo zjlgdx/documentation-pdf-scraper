@@ -35,7 +35,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "async": "^3.2.5",
     "chalk": "^5.6.2",
     "joi": "^18.1.2",
     "mdast-util-from-markdown": "^2.0.3",
@@ -43,12 +42,10 @@
     "micromark-extension-mdxjs": "^3.0.0",
     "p-limit": "^7.3.0",
     "p-queue": "^9.2.0",
-    "pdf-lib": "^1.17.1",
     "puppeteer": "^24.42.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "turndown": "^7.2.4",
-    "unist-util-visit": "^5.1.0",
     "winston": "^3.19.0"
   },
   "devDependencies": {
