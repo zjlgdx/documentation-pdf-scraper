@@ -1107,6 +1107,328 @@ export class Scraper extends EventEmitter {
     return { success: false, error: lastError?.message || 'All navigation strategies failed' };
   }
 
+  async _preparePageForScraping(page, url, index) {
+    await this.imageService.setupImageObserver(page);
+
+    const navigationResult = await this.navigateWithFallback(page, url);
+    if (!navigationResult.success) {
+      throw new Error(`导航失败: ${navigationResult.error}`);
+    }
+
+    await this._waitForPageContent(page, url);
+    const titleInfo = await this._extractPageTitle(page);
+    const imagesLoaded = await this._preparePageContent(page, url, index);
+
+    return { titleInfo, imagesLoaded };
+  }
+
+  async _waitForPageContent(page, url) {
+    try {
+      await page.waitForSelector(this.config.contentSelector, { timeout: 10000 });
+    } catch (error) {
+      this.logger.warn('内容选择器等待超时', {
+        url,
+        selector: this.config.contentSelector,
+        error: error.message,
+      });
+      throw new ValidationError('页面内容未找到');
+    }
+  }
+
+  async _extractPageTitle(page) {
+    return page.evaluate((selector) => {
+      const docTitle = document.title?.trim();
+      if (docTitle) {
+        return { title: docTitle, source: 'document.title' };
+      }
+
+      const contentElement = document.querySelector(selector);
+      const contentCandidates = [
+        ['h1', 'content-h1'],
+        ['title, .title, .page-title, [class*="page-title"], [class*="PageTitle"]', 'content-title-class'],
+        ['h2, h3', 'content-h2-h3'],
+      ];
+
+      for (const [candidateSelector, source] of contentCandidates) {
+        const title = contentElement?.querySelector(candidateSelector)?.innerText?.trim();
+        if (title) return { title, source };
+      }
+
+      const globalTitle = document.querySelector('h1')?.innerText?.trim();
+      return globalTitle
+        ? { title: globalTitle, source: 'global-h1' }
+        : { title: '', source: 'none' };
+    }, this.config.contentSelector);
+  }
+
+  async _preparePageContent(page, url, index) {
+    const imagesLoaded = await this._loadPageImages(page, url, index);
+
+    await this._runOptionalPageStep(
+      () => this.pdfStyleService.processSpecialContent(page),
+      '折叠元素展开失败',
+      url
+    );
+    await this._runOptionalPageStep(
+      () => this.pdfStyleService.removeDarkTheme(page),
+      '深色主题移除失败',
+      url
+    );
+
+    this.logger.info('PDF样式处理配置检查', {
+      url,
+      enablePDFStyleProcessing: this.config.enablePDFStyleProcessing,
+      type: typeof this.config.enablePDFStyleProcessing,
+      strictCheck: this.config.enablePDFStyleProcessing === true,
+      configKeys: Object.keys(this.config).filter(
+        (key) => key.includes('PDF') || key.includes('Style')
+      ),
+    });
+
+    if (this.config.enablePDFStyleProcessing === true) {
+      await this._runOptionalPageStep(
+        () => this.pdfStyleService.applyPDFStyles(page, this.config.contentSelector),
+        'PDF样式处理失败，跳过样式优化',
+        url
+      );
+    }
+
+    return imagesLoaded;
+  }
+
+  async _loadPageImages(page, url, index) {
+    try {
+      const imagesLoaded = await this.imageService.triggerLazyLoading(page);
+      if (!imagesLoaded) {
+        this.logger.warn(`部分图片未能加载: ${url}`);
+        await this.metadataService.logImageLoadFailure(url, index);
+      }
+      return imagesLoaded;
+    } catch (error) {
+      this.logger.warn('图片加载处理失败', { url, error: error.message });
+      await this.metadataService.logImageLoadFailure(url, index);
+      return false;
+    }
+  }
+
+  async _runOptionalPageStep(action, warningMessage, url) {
+    try {
+      await action();
+    } catch (error) {
+      this.logger.warn(warningMessage, { url, error: error.message });
+    }
+  }
+
+  _isMarkdownWorkflowEnabled() {
+    return Boolean(
+      this.config.markdown?.enabled
+      && this.config.markdownPdf?.enabled
+      && this.markdownService
+      && this.markdownToPdfService
+    );
+  }
+
+  async _generatePageOutput({ page, url, index, title, pdfPath }) {
+    if (!this._isMarkdownWorkflowEnabled()) {
+      await this._translatePageSafely(page, url);
+      await this._generatePuppeteerPdf(page, pdfPath);
+      return { actualOutputPath: pdfPath, isBatchMode: false };
+    }
+
+    try {
+      return await this._generateMarkdownOutput({ page, url, index, title, pdfPath });
+    } catch (error) {
+      this.logger.warn('Markdown 工作流失败，回退到 Puppeteer PDF', {
+        url,
+        error: error.message,
+      });
+      await this._translatePageSafely(page, url);
+      await this._generatePuppeteerPdf(page, pdfPath, { fallback: true });
+      return { actualOutputPath: pdfPath, isBatchMode: false };
+    }
+  }
+
+  async _generateMarkdownOutput({ page, url, index, title, pdfPath }) {
+    const { markdownContent, sourceTitle } = await this._loadMarkdownContent(page, url, pdfPath);
+    const markdownWithFrontmatter = this.markdownService.addFrontmatter(markdownContent, {
+      title: sourceTitle || title,
+      url,
+      index,
+    });
+    const translatedMarkdown = this.translationService
+      ? await this.translationService.translateMarkdown(markdownWithFrontmatter)
+      : markdownWithFrontmatter;
+    const { translatedMarkdownPath } = await this._writeMarkdownArtifacts({
+      pdfPath,
+      markdownWithFrontmatter,
+      translatedMarkdown,
+    });
+
+    if (this.config.markdownPdf?.batchMode) {
+      this.logger.info('Batch mode enabled - skipping individual PDF generation', {
+        url,
+        markdownPath: translatedMarkdownPath,
+      });
+      return { actualOutputPath: translatedMarkdownPath, isBatchMode: true };
+    }
+
+    await this.markdownToPdfService.convertContentToPdf(
+      translatedMarkdown,
+      pdfPath,
+      this.config.markdownPdf
+    );
+    this.logger.info('Markdown 工作流 PDF 已生成', { pdfPath });
+    return { actualOutputPath: pdfPath, isBatchMode: false };
+  }
+
+  async _loadMarkdownContent(page, url, pdfPath) {
+    if (this.config.markdownSource?.enabled) {
+      const source = await this._fetchMarkdownSource(url);
+      if (source) {
+        const normalizedSource = this.markdownService.normalizeResourceUrls(source.content, url);
+        const markdownContent = this.markdownService.sanitizeMarkdown(normalizedSource, {
+          pageUrl: url,
+        });
+        this.logger.info('使用直接获取的 Markdown 源文件', {
+          url,
+          pdfPath,
+          titleFromSource: source.title,
+        });
+        return { markdownContent, sourceTitle: source.title };
+      }
+    }
+
+    this.logger.info('使用 DOM 转换 Markdown 工作流', { url, pdfPath });
+    return {
+      markdownContent: await this.markdownService.extractAndConvertPage(
+        page,
+        this.config.contentSelector
+      ),
+      sourceTitle: null,
+    };
+  }
+
+  async _writeMarkdownArtifacts({ pdfPath, markdownWithFrontmatter, translatedMarkdown }) {
+    const markdownOutputDir = path.join(
+      this.config.pdfDir,
+      this.config.markdown?.outputDir || 'markdown'
+    );
+    const baseName = path.basename(pdfPath, '.pdf');
+    const originalMarkdownPath = path.join(markdownOutputDir, `${baseName}.md`);
+    const translatedMarkdownPath = path.join(markdownOutputDir, `${baseName}_translated.md`);
+
+    await this.fileService.writeText(originalMarkdownPath, markdownWithFrontmatter);
+    await this.fileService.writeText(translatedMarkdownPath, translatedMarkdown);
+    return { originalMarkdownPath, translatedMarkdownPath };
+  }
+
+  async _translatePageSafely(page, url) {
+    if (!this.translationService) return;
+
+    try {
+      this.logger.info('Before translation wait');
+      await this.translationService.translatePage(page);
+      this.logger.info('After translation wait');
+    } catch (error) {
+      this.logger.warn('翻译失败，继续生成原始PDF', { url, error: error.message });
+    }
+  }
+
+  async _generatePuppeteerPdf(page, pdfPath, { fallback = false } = {}) {
+    this.logger.info(
+      fallback ? '开始使用Puppeteer引擎生成PDF（回退模式）' : '开始使用Puppeteer引擎生成PDF',
+      { pdfPath }
+    );
+    await page.pdf({
+      ...this.pdfStyleService.getPDFOptions(),
+      path: pdfPath,
+    });
+    this.logger.info(`PDF已保存: ${pdfPath}`);
+  }
+
+  async _persistScrapeSuccess({ url, index, titleInfo, output, imagesLoaded }) {
+    const { title } = titleInfo;
+    this.stateManager.setUrlIndex(url, index);
+    await this._persistArticleTitle(url, index, titleInfo);
+    this.stateManager.markProcessed(url, output.actualOutputPath);
+    this.progressTracker.success(url);
+
+    const processedCount = this.progressTracker.getStats().processed;
+    if (processedCount % 10 === 0) {
+      await this.stateManager.save();
+      this.logger.debug('状态已保存', { processedCount });
+    }
+
+    const result = {
+      status: 'success',
+      title,
+      outputPath: output.actualOutputPath,
+      isBatchMode: output.isBatchMode,
+      imagesLoaded,
+    };
+    this.emit('pageScraped', {
+      url,
+      index,
+      title,
+      outputPath: result.outputPath,
+      isBatchMode: result.isBatchMode,
+      imagesLoaded,
+    });
+    return result;
+  }
+
+  async _persistArticleTitle(url, index, titleInfo) {
+    const cleanedTitle = this._cleanTitle(titleInfo.title);
+    if (cleanedTitle) {
+      await this.metadataService.saveArticleTitle(String(index), cleanedTitle);
+      this.logger.info(`提取到标题 [${index}]: ${cleanedTitle}`, {
+        source: titleInfo.source,
+        original: titleInfo.title !== cleanedTitle ? titleInfo.title : undefined,
+      });
+      return;
+    }
+
+    this.logger.warn(`⚠️ 标题提取失败 [${index}/${this.urlQueue.length}]: ${url}`, {
+      contentSelector: this.config.contentSelector,
+      source: titleInfo.source,
+      titleInfo,
+      hint:
+        'PDF目录将显示文件名而非实际标题。请检查：'
+        + '\n  1. contentSelector 是否正确匹配页面结构'
+        + '\n  2. 页面是否完全加载（检查 navigationWaitUntil 配置）'
+        + '\n  3. 页面是否有 <title> 标签或 h1-h3 标题元素',
+    });
+    await this.metadataService.logFailedLink(
+      url,
+      index,
+      new Error(`Title extraction failed: source=${titleInfo.source}`)
+    );
+  }
+
+  _recordScrapeFailure(url, index, error, isRetry) {
+    this.logger.error(`页面爬取失败 [${index + 1}]: ${url}`, {
+      error: error.message,
+      stack: error.stack,
+    });
+    this.stateManager.markFailed(url, error);
+    const willRetry = this.config.retryFailedUrls !== false && !isRetry;
+    this.progressTracker.failure(url, error, willRetry);
+    this.emit('pageScrapeFailed', { url, index, error: error.message });
+  }
+
+  async _cleanupScrapePage(page, pageId) {
+    if (!page) return;
+
+    try {
+      await this.imageService.cleanupPage(page);
+    } catch (error) {
+      this.logger?.debug('图片服务页面清理失败（非致命错误）', {
+        error: error.message,
+      });
+    }
+    await this.pageManager.closePage(pageId);
+  }
+
   /**
    * 爬取单个页面 - 关键修改：使用数字索引命名
    */
@@ -1130,145 +1452,8 @@ export class Scraper extends EventEmitter {
       // 创建页面
       page = await this.pageManager.createPage(pageId);
 
-      // 设置图片观察器
-      await this.imageService.setupImageObserver(page);
-
-      // 访问页面 - 使用渐进式超时策略
-      const navigationResult = await this.navigateWithFallback(page, url);
-      if (!navigationResult.success) {
-        throw new Error(`导航失败: ${navigationResult.error}`);
-      }
-
-      // 等待内容加载
-      let contentFound = false;
-      try {
-        await page.waitForSelector(this.config.contentSelector, {
-          timeout: 10000,
-        });
-        contentFound = true;
-      } catch (error) {
-        this.logger.warn('内容选择器等待超时', {
-          url,
-          selector: this.config.contentSelector,
-          error: error.message,
-        });
-      }
-
-      if (!contentFound) {
-        throw new ValidationError('页面内容未找到');
-      }
-
-      // 提取页面标题（多源回退策略）
-      const titleInfo = await page.evaluate((selector) => {
-        let title = '';
-        let source = 'none';
-
-        // 策略 1: 优先使用 document.title（最可靠，始终在 <head> 中）
-        const docTitle = document.title || '';
-        if (docTitle && docTitle.trim().length > 0) {
-          title = docTitle.trim();
-          source = 'document.title';
-        }
-
-        // 策略 2: 如果 document.title 为空，从 contentSelector 内提取
-        if (!title) {
-          const contentElement = document.querySelector(selector);
-          if (contentElement) {
-            // 2a. 尝试 h1
-            const h1 = contentElement.querySelector('h1');
-            if (h1?.innerText?.trim()) {
-              title = h1.innerText.trim();
-              source = 'content-h1';
-            }
-            // 2b. 尝试 .title/.page-title 等
-            else {
-              const titleEl = contentElement.querySelector(
-                'title, .title, .page-title, [class*="page-title"], [class*="PageTitle"]'
-              );
-              if (titleEl?.innerText?.trim()) {
-                title = titleEl.innerText.trim();
-                source = 'content-title-class';
-              }
-              // 2c. 尝试 h2/h3
-              else {
-                const heading = contentElement.querySelector('h2, h3');
-                if (heading?.innerText?.trim()) {
-                  title = heading.innerText.trim();
-                  source = 'content-h2-h3';
-                }
-              }
-            }
-          }
-        }
-
-        // 策略 3: 如果 contentSelector 内没找到，尝试全局 h1（回退方案）
-        if (!title) {
-          const globalH1 = document.querySelector('h1');
-          if (globalH1?.innerText?.trim()) {
-            title = globalH1.innerText.trim();
-            source = 'global-h1';
-          }
-        }
-
-        return { title, source };
-      }, this.config.contentSelector);
-
+      const { titleInfo, imagesLoaded } = await this._preparePageForScraping(page, url, index);
       const title = titleInfo.title;
-
-      // 处理懒加载图片
-      let imagesLoaded = false;
-      try {
-        imagesLoaded = await this.imageService.triggerLazyLoading(page);
-        if (!imagesLoaded) {
-          this.logger.warn(`部分图片未能加载: ${url}`);
-          await this.metadataService.logImageLoadFailure(url, index);
-        }
-      } catch (error) {
-        this.logger.warn('图片加载处理失败', { url, error: error.message });
-        await this.metadataService.logImageLoadFailure(url, index);
-      }
-
-      // 展开折叠元素（始终执行，确保内容可见）
-      try {
-        await this.pdfStyleService.processSpecialContent(page);
-      } catch (expandError) {
-        this.logger.warn('折叠元素展开失败', {
-          url,
-          error: expandError.message,
-        });
-      }
-
-      // 移除深色主题（始终执行，安全操作，不替换DOM）
-      try {
-        await this.pdfStyleService.removeDarkTheme(page);
-      } catch (themeError) {
-        this.logger.warn('深色主题移除失败', { url, error: themeError.message });
-      }
-
-      // 应用PDF样式优化（可选，添加错误处理）
-      // 🔍 诊断日志：记录配置检查详情
-      this.logger.info('PDF样式处理配置检查', {
-        url,
-        enablePDFStyleProcessing: this.config.enablePDFStyleProcessing,
-        type: typeof this.config.enablePDFStyleProcessing,
-        strictCheck: this.config.enablePDFStyleProcessing === true,
-        configKeys: Object.keys(this.config).filter(
-          (k) => k.includes('PDF') || k.includes('Style')
-        ),
-      });
-
-      if (this.config.enablePDFStyleProcessing === true) {
-        try {
-          await this.pdfStyleService.applyPDFStyles(page, this.config.contentSelector);
-        } catch (styleError) {
-          this.logger.warn('PDF样式处理失败，跳过样式优化', {
-            url,
-            error: styleError.message,
-          });
-          // 继续生成PDF，即使样式处理失败
-        }
-        // 继续生成PDF，即使翻译失败
-      }
 
       // 🔥 关键修改：生成PDF时使用数字索引而不是哈希
       const pdfPath = this.pathService.getPdfPath(url, {
@@ -1278,238 +1463,19 @@ export class Scraper extends EventEmitter {
 
       await this.fileService.ensureDirectory(path.dirname(pdfPath));
 
-      const useMarkdownWorkflow =
-        this.config.markdown?.enabled &&
-        this.config.markdownPdf?.enabled &&
-        !!this.markdownService &&
-        !!this.markdownToPdfService;
-
-      // Track actual output path (markdown in batch mode, PDF otherwise)
-      let actualOutputPath = pdfPath;
-      let isBatchMode = false;
-
-      if (useMarkdownWorkflow) {
-        try {
-          let markdownContent;
-          let sourceTitle = null;
-
-          // 优先尝试直接获取 Markdown 源文件
-          if (this.config.markdownSource?.enabled) {
-            const mdSource = await this._fetchMarkdownSource(url);
-            if (mdSource) {
-              const normalizedSource = this.markdownService.normalizeResourceUrls(mdSource.content, url);
-              markdownContent = this.markdownService.sanitizeMarkdown(normalizedSource, {
-                pageUrl: url,
-              });
-              sourceTitle = mdSource.title;
-              this.logger.info('使用直接获取的 Markdown 源文件', {
-                url,
-                pdfPath,
-                titleFromSource: sourceTitle,
-              });
-            }
-          }
-
-          // 如果未启用或获取失败，回退到 DOM 提取
-          if (!markdownContent) {
-            this.logger.info('使用 DOM 转换 Markdown 工作流', {
-              url,
-              pdfPath,
-            });
-            markdownContent = await this.markdownService.extractAndConvertPage(
-              page,
-              this.config.contentSelector
-            );
-          }
-
-          // 如果从源文件获取到标题，使用它覆盖 DOM 提取的标题
-          const finalTitle = sourceTitle || title;
-
-          const markdownWithFrontmatter = this.markdownService.addFrontmatter(markdownContent, {
-            title: finalTitle,
-            url,
-            index,
-          });
-
-          const translatedMarkdown = this.translationService
-            ? await this.translationService.translateMarkdown(markdownWithFrontmatter)
-            : markdownWithFrontmatter;
-
-          const markdownOutputDir = path.join(
-            this.config.pdfDir,
-            this.config.markdown?.outputDir || 'markdown'
-          );
-          const baseName = path.basename(pdfPath, '.pdf');
-          const originalMarkdownPath = path.join(markdownOutputDir, `${baseName}.md`);
-          const translatedMarkdownPath = path.join(markdownOutputDir, `${baseName}_translated.md`);
-
-          await this.fileService.writeText(originalMarkdownPath, markdownWithFrontmatter);
-          await this.fileService.writeText(translatedMarkdownPath, translatedMarkdown);
-
-          // Check if batch mode is enabled - skip individual PDF generation
-          if (this.config.markdownPdf?.batchMode) {
-            this.logger.info('Batch mode enabled - skipping individual PDF generation', {
-              url,
-              markdownPath: translatedMarkdownPath,
-            });
-            // PDF will be generated in batch after all pages are scraped
-            // Track markdown path instead of non-existent PDF path
-            actualOutputPath = translatedMarkdownPath;
-            isBatchMode = true;
-          } else {
-            await this.markdownToPdfService.convertContentToPdf(
-              translatedMarkdown,
-              pdfPath,
-              this.config.markdownPdf
-            );
-            this.logger.info('Markdown 工作流 PDF 已生成', { pdfPath });
-          }
-        } catch (markdownError) {
-          this.logger.warn('Markdown 工作流失败，回退到 Puppeteer PDF', {
-            url,
-            error: markdownError.message,
-          });
-
-          // 回退到原始 DOM 翻译 + Puppeteer PDF
-          if (this.translationService) {
-            try {
-              this.logger.info('Before translation wait');
-              await this.translationService.translatePage(page);
-              this.logger.info('After translation wait');
-            } catch (translationError) {
-              this.logger.warn('翻译失败，继续生成原始PDF', {
-                url,
-                error: translationError.message,
-              });
-            }
-          }
-
-          this.logger.info('开始使用Puppeteer引擎生成PDF（回退模式）', {
-            pdfPath,
-          });
-          const fallbackPdfOptions = {
-            ...this.pdfStyleService.getPDFOptions(),
-            path: pdfPath,
-          };
-          await page.pdf(fallbackPdfOptions);
-          this.logger.info(`PDF已保存: ${pdfPath}`);
-        }
-      } else {
-        // 原始 DOM 翻译 + Puppeteer PDF 工作流
-        if (this.translationService) {
-          try {
-            this.logger.info('Before translation wait');
-            await this.translationService.translatePage(page);
-            this.logger.info('After translation wait');
-          } catch (translationError) {
-            this.logger.warn('翻译失败，继续生成原始PDF', {
-              url,
-              error: translationError.message,
-            });
-          }
-        }
-
-        this.logger.info('开始使用Puppeteer引擎生成PDF', { pdfPath });
-        const pdfOptions = {
-          ...this.pdfStyleService.getPDFOptions(),
-          path: pdfPath,
-        };
-        await page.pdf(pdfOptions);
-        this.logger.info(`PDF已保存: ${pdfPath}`);
-      }
-
-      // 保存URL到索引的映射，用于追溯和调试
-      this.stateManager.setUrlIndex(url, index);
-
-      // 清理并保存标题映射（使用字符串索引以匹配Python期望）
-      const cleanedTitle = this._cleanTitle(title);
-      if (cleanedTitle) {
-        await this.metadataService.saveArticleTitle(String(index), cleanedTitle);
-        this.logger.info(`提取到标题 [${index}]: ${cleanedTitle}`, {
-          source: titleInfo.source,
-          original: title !== cleanedTitle ? title : undefined,
-        });
-      } else {
-        // ⚠️ 警告：标题提取失败
-        this.logger.warn(`⚠️ 标题提取失败 [${index}/${this.urlQueue.length}]: ${url}`, {
-          contentSelector: this.config.contentSelector,
-          source: titleInfo.source,
-          titleInfo: titleInfo,
-          hint:
-            'PDF目录将显示文件名而非实际标题。请检查：' +
-            '\n  1. contentSelector 是否正确匹配页面结构' +
-            '\n  2. 页面是否完全加载（检查 navigationWaitUntil 配置）' +
-            '\n  3. 页面是否有 <title> 标签或 h1-h3 标题元素',
-        });
-
-        // 记录到元数据以便后续分析
-        await this.metadataService.logFailedLink(
-          url,
-          index,
-          new Error(`Title extraction failed: source=${titleInfo.source}`)
-        );
-      }
-
-      // 标记为已处理 (use actual output path - markdown in batch mode, PDF otherwise)
-      this.stateManager.markProcessed(url, actualOutputPath);
-      this.progressTracker.success(url);
-
-      // 定期保存状态
-      const processedCount = this.progressTracker.getStats().processed;
-      if (processedCount % 10 === 0) {
-        await this.stateManager.save();
-        this.logger.debug('状态已保存', { processedCount });
-      }
-
-      this.emit('pageScraped', {
+      const output = await this._generatePageOutput({ page, url, index, title, pdfPath });
+      return await this._persistScrapeSuccess({
         url,
         index,
-        title,
-        outputPath: actualOutputPath,
-        isBatchMode,
+        titleInfo,
+        output,
         imagesLoaded,
       });
-
-      return {
-        status: 'success',
-        title,
-        outputPath: actualOutputPath,
-        isBatchMode,
-        imagesLoaded,
-      };
     } catch (error) {
-      this.logger.error(`页面爬取失败 [${index + 1}]: ${url}`, {
-        error: error.message,
-        stack: error.stack,
-      });
-
-      // 记录失败
-      this.stateManager.markFailed(url, error);
-      const willRetry = this.config.retryFailedUrls !== false && !isRetry;
-      this.progressTracker.failure(url, error, willRetry);
-
-      this.emit('pageScrapeFailed', {
-        url,
-        index,
-        error: error.message,
-      });
-
+      this._recordScrapeFailure(url, index, error, isRetry);
       throw new NetworkError(`页面爬取失败: ${url}`, url, error);
     } finally {
-      // 🔧 修复：正确的清理顺序
-      if (page) {
-        try {
-          // 1. 先清理页面相关的图片服务资源
-          await this.imageService.cleanupPage(page);
-        } catch (cleanupError) {
-          this.logger?.debug('图片服务页面清理失败（非致命错误）', {
-            error: cleanupError.message,
-          });
-        }
-
-        // 2. 然后关闭页面
-        await this.pageManager.closePage(pageId);
-      }
+      await this._cleanupScrapePage(page, pageId);
     }
   }
 

@@ -10,7 +10,10 @@ export class QueueManager extends EventEmitter {
       concurrency: options.concurrency || 5,
       interval: options.interval || 1000,
       intervalCap: options.intervalCap || 5,
-      timeout: options.timeout || 30000,
+      // Disabled by default. p-queue timeouts reject the queue promise but do
+      // not cancel the underlying async function, which can make onIdle fire
+      // while scraping or translation is still running.
+      timeout: options.timeout ?? null,
       // p-queue v9 removed throwOnTimeout — timeout always throws TimeoutError
       maxTaskHistory:
         Number.isInteger(options.maxTaskHistory) && options.maxTaskHistory >= 0
@@ -19,12 +22,16 @@ export class QueueManager extends EventEmitter {
       ...options,
     };
 
-    this.queue = new PQueue({
+    const queueOptions = {
       concurrency: this.options.concurrency,
       interval: this.options.interval,
       intervalCap: this.options.intervalCap,
-      timeout: this.options.timeout,
-    });
+    };
+    if (Number.isFinite(this.options.timeout) && this.options.timeout > 0) {
+      queueOptions.timeout = this.options.timeout;
+    }
+
+    this.queue = new PQueue(queueOptions);
 
     this.tasks = new Map();
     this.taskHistory = new Map();

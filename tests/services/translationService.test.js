@@ -4,6 +4,8 @@ import { describe, it, test, expect, beforeAll, beforeEach, afterAll, afterEach,
 import fs from 'fs';
 import path from 'path';
 import { TranslationService } from '../../src/services/translationService.js';
+import { GeminiClient } from '../../src/services/geminiClient.js';
+import { PiClient } from '../../src/services/piClient.js';
 
 // Mock p-limit (ESM default export)
 vi.mock('p-limit', () => ({
@@ -83,6 +85,15 @@ describe('TranslationService', () => {
 
     const bilingualKey = bilingualService._getCacheKey(text);
     expect(bilingualKey).not.toBe(key1);
+
+    const piService = createService({
+      config: {
+        ...baseConfig,
+        translation: { ...baseConfig.translation, provider: 'pi' },
+      },
+      logger,
+    });
+    expect(piService._getCacheKey(text)).not.toBe(key1);
   });
 
   test('_saveToCache 和 _getFromCache 应该能正确读写缓存', async () => {
@@ -116,6 +127,23 @@ describe('TranslationService', () => {
     expect(service.timeoutMs).toBeGreaterThanOrEqual(60000);
     expect(service.maxRetries).toBe(3);
     expect(service.retryDelay).toBe(2000);
+    expect(service._createClient()).toBeInstanceOf(GeminiClient);
+  });
+
+  test('provider=pi 时应该创建 Pi CLI 客户端', () => {
+    const service = createService({
+      config: {
+        ...baseConfig,
+        translation: {
+          ...baseConfig.translation,
+          provider: 'pi',
+          model: 'google/gemini-2.5-flash',
+        },
+      },
+      logger,
+    });
+
+    expect(service._createClient()).toBeInstanceOf(PiClient);
   });
 
   test('translateMarkdown 应该保留 frontmatter 和代码块，并在双语模式下追加译文', async () => {

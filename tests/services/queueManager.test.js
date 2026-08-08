@@ -65,7 +65,7 @@ describe('QueueManager', () => {
       expect(defaultQM.options.concurrency).toBe(5);
       expect(defaultQM.options.interval).toBe(1000);
       expect(defaultQM.options.intervalCap).toBe(5);
-      expect(defaultQM.options.timeout).toBe(30000);
+      expect(defaultQM.options.timeout).toBeNull();
       // p-queue v9 removed throwOnTimeout — timeout always throws TimeoutError
     });
 

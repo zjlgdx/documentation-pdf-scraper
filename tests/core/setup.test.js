@@ -408,7 +408,7 @@ describe('setup', () => {
       queueManagerFactory({ concurrency: 10 }, mockLoggerService);
       expect(QueueManager).toHaveBeenCalledWith({
         concurrency: 10,
-        timeout: 60000,
+        timeout: undefined,
         logger: mockLoggerService,
       });
 
@@ -583,7 +583,7 @@ describe('setup', () => {
       queueManagerFactory({}, {});
       expect(QueueManager).toHaveBeenCalledWith({
         concurrency: 5,
-        timeout: 60000,
+        timeout: undefined,
         logger: {},
       });
 

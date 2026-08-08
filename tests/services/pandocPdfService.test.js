@@ -171,6 +171,60 @@ describe('PandocPdfService', () => {
 
       expect(args).toContain('CJKmainfont=Source Han Sans SC');
     });
+
+    it('should apply the Kindle Scribe profile to Pandoc output', () => {
+      const scribeService = new PandocPdfService({
+        logger: mockLogger,
+        config: {
+          pdf: {
+            kindleOptimized: true,
+            deviceProfile: 'scribe',
+            fontSize: '18px',
+            lineHeight: '1.7',
+            pageFormat: 'A4',
+            margin: { top: '1cm', right: '1cm', bottom: '1cm', left: '1cm' },
+          },
+          markdownPdf: {
+            pdfOptions: { format: 'Letter', margin: '20mm' },
+          },
+        },
+      });
+
+      const args = scribeService._buildPandocArgs('input.md', 'output.pdf');
+
+      expect(args).toContain('papersize=a4');
+      expect(args).toContain('documentclass=scrartcl');
+      expect(args).toContain('classoption=fontsize=13.5pt');
+      expect(args).toContain('linestretch=1.417');
+      expect(args).toContain('geometry:top=1cm,right=1cm,bottom=1cm,left=1cm');
+      expect(args).not.toContain('papersize=letter');
+      expect(args).not.toContain('geometry:margin=20mm');
+    });
+  });
+
+  describe('_concatenateMarkdownFiles', () => {
+    it('keeps a section heading with its first article instead of creating a title-only page', () => {
+      fs.writeFileSync(path.join(tempDir, '000-first.md'), '# First\n\nFirst body.');
+      fs.writeFileSync(path.join(tempDir, '001-second.md'), '# Second\n\nSecond body.');
+
+      const combined = service._concatenateMarkdownFiles(
+        tempDir,
+        ['000-first.md', '001-second.md'],
+        {
+          sections: [
+            {
+              title: 'Section',
+              pages: [{ index: '0' }, { index: '1' }],
+            },
+          ],
+        },
+        { 0: 'First', 1: 'Second' }
+      );
+
+      expect(combined).toMatch(/^# Section\n\n## First/);
+      expect(combined).toContain('\\newpage\n\n## Second');
+      expect(combined).not.toContain('# Section\n\n\\newpage');
+    });
   });
 
   describe('convertContentToPdf', () => {

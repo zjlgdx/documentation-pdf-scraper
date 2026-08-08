@@ -194,7 +194,12 @@ const configSchema = Joi.object({
       .default(1000)
       .description('Base delay between retries (ms)'),
 
-    timeout: Joi.number().integer().min(5000).default(30000).description('Operation timeout (ms)'),
+    timeout: Joi.number()
+      .integer()
+      .min(5000)
+      .allow(null)
+      .default(null)
+      .description('Optional queue task timeout (ms); disabled by default to avoid orphaned work'),
   })
     .default()
     .description('Queue management settings'),
@@ -542,6 +547,23 @@ const configSchema = Joi.object({
   // 翻译配置
   translation: Joi.object({
     enabled: Joi.boolean().default(false).description('Enable translation'),
+
+    provider: Joi.string()
+      .valid('gemini', 'pi')
+      .default('gemini')
+      .description('CLI translation provider'),
+
+    model: Joi.string()
+      .trim()
+      .min(1)
+      .optional()
+      .description('Optional model selector passed to the translation CLI'),
+
+    piProvider: Joi.string()
+      .trim()
+      .min(1)
+      .optional()
+      .description('Optional Pi provider selector'),
 
     bilingual: Joi.boolean()
       .default(false)

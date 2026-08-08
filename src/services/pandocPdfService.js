@@ -7,6 +7,61 @@ import { fromMarkdown } from 'mdast-util-from-markdown';
 import { mdxFromMarkdown } from 'mdast-util-mdx';
 import { mdxjs } from 'micromark-extension-mdxjs';
 
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const IMAGE_CONTENT_TYPE_FORMATS = [
+  ['image/png', 'png'],
+  ['image/jpeg', 'jpg'],
+  ['image/webp', 'webp'],
+  ['image/avif', 'avif'],
+  ['image/gif', 'gif'],
+  ['image/svg+xml', 'svg'],
+  ['application/pdf', 'pdf'],
+];
+const IMAGE_SIGNATURE_DETECTORS = [
+  {
+    format: 'png',
+    matches: (buffer) => buffer.length >= PNG_SIGNATURE.length
+      && buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE),
+  },
+  {
+    format: 'jpg',
+    matches: (buffer) => buffer.length >= 3
+      && buffer[0] === 0xff
+      && buffer[1] === 0xd8
+      && buffer[2] === 0xff,
+  },
+  {
+    format: 'svg',
+    matches: (buffer) => buffer
+      .subarray(0, Math.min(buffer.length, 512))
+      .toString('utf8')
+      .replace(/^\uFEFF/, '')
+      .trimStart()
+      .toLowerCase()
+      .includes('<svg'),
+  },
+  {
+    format: 'gif',
+    matches: (buffer) => ['GIF87a', 'GIF89a'].includes(buffer.subarray(0, 6).toString('ascii')),
+  },
+  {
+    format: 'webp',
+    matches: (buffer) => buffer.length >= 12
+      && buffer.subarray(0, 4).toString('ascii') === 'RIFF'
+      && buffer.subarray(8, 12).toString('ascii') === 'WEBP',
+  },
+  {
+    format: 'pdf',
+    matches: (buffer) => buffer.subarray(0, 5).toString('ascii') === '%PDF-',
+  },
+  {
+    format: 'avif',
+    matches: (buffer) => buffer.length >= 12
+      && buffer.subarray(4, 8).toString('ascii') === 'ftyp'
+      && ['avif', 'avis'].includes(buffer.subarray(8, 12).toString('ascii')),
+  },
+];
+
 /**
  * PandocPdfService
  * 使用 Pandoc 将 Markdown 内容或文件转换为 PDF
@@ -1323,68 +1378,12 @@ export class PandocPdfService {
    */
   _detectDownloadedImageFormat(buffer, contentType = '') {
     if (Buffer.isBuffer(buffer) && buffer.length > 0) {
-      if (
-        buffer.length >= 8
-        && buffer[0] === 0x89
-        && buffer[1] === 0x50
-        && buffer[2] === 0x4e
-        && buffer[3] === 0x47
-        && buffer[4] === 0x0d
-        && buffer[5] === 0x0a
-        && buffer[6] === 0x1a
-        && buffer[7] === 0x0a
-      ) {
-        return 'png';
-      }
-
-      if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-        return 'jpg';
-      }
-
-      const leadingAscii = buffer.subarray(0, Math.min(buffer.length, 512)).toString('utf8');
-      const trimmedLeadingAscii = leadingAscii.replace(/^\uFEFF/, '').trimStart().toLowerCase();
-
-      if (trimmedLeadingAscii.includes('<svg')) {
-        return 'svg';
-      }
-
-      if (buffer.length >= 6) {
-        const gifSignature = buffer.subarray(0, 6).toString('ascii');
-        if (gifSignature === 'GIF87a' || gifSignature === 'GIF89a') {
-          return 'gif';
-        }
-      }
-
-      if (
-        buffer.length >= 12
-        && buffer.subarray(0, 4).toString('ascii') === 'RIFF'
-        && buffer.subarray(8, 12).toString('ascii') === 'WEBP'
-      ) {
-        return 'webp';
-      }
-
-      if (buffer.length >= 5 && buffer.subarray(0, 5).toString('ascii') === '%PDF-') {
-        return 'pdf';
-      }
-
-      if (buffer.length >= 12 && buffer.subarray(4, 8).toString('ascii') === 'ftyp') {
-        const brand = buffer.subarray(8, 12).toString('ascii');
-        if (brand === 'avif' || brand === 'avis') {
-          return 'avif';
-        }
-      }
+      const detector = IMAGE_SIGNATURE_DETECTORS.find(({ matches }) => matches(buffer));
+      if (detector) return detector.format;
     }
 
     const normalizedType = contentType.toLowerCase();
-    if (normalizedType.includes('image/png')) return 'png';
-    if (normalizedType.includes('image/jpeg')) return 'jpg';
-    if (normalizedType.includes('image/webp')) return 'webp';
-    if (normalizedType.includes('image/avif')) return 'avif';
-    if (normalizedType.includes('image/gif')) return 'gif';
-    if (normalizedType.includes('image/svg+xml')) return 'svg';
-    if (normalizedType.includes('application/pdf')) return 'pdf';
-
-    return '';
+    return IMAGE_CONTENT_TYPE_FORMATS.find(([type]) => normalizedType.includes(type))?.[1] || '';
   }
 
   /**
@@ -2245,6 +2244,7 @@ export class PandocPdfService {
       ...(options || {}),
     };
     const cjkMainFont = markdownPdfConfig.cjkMainFont || 'Noto Sans CJK SC';
+    const kindleOptions = this._getKindlePandocOptions();
 
     const args = [
       inputPath,
@@ -2253,8 +2253,6 @@ export class PandocPdfService {
       '--pdf-engine=xelatex', // 使用 xelatex 支持中文
       '--variable',
       `CJKmainfont=${cjkMainFont}`, // 主字体（使用 CI 可用的开源字体，支持通过配置覆盖）
-      '--variable',
-      'geometry:margin=1in', // 页边距
     ];
 
     if (markdownPdfConfig.headerIncludePath) {
@@ -2262,7 +2260,10 @@ export class PandocPdfService {
     }
 
     // 添加其他选项
-    const pdfOptions = markdownPdfConfig.pdfOptions || {};
+    const pdfOptions = {
+      ...(markdownPdfConfig.pdfOptions || {}),
+      ...(kindleOptions.pdfOptions || {}),
+    };
 
     // 如果指定了格式，添加纸张大小
     if (pdfOptions.format) {
@@ -2270,9 +2271,11 @@ export class PandocPdfService {
     }
 
     // 如果指定了边距
-    if (pdfOptions.margin) {
-      args.push('--variable', `geometry:margin=${pdfOptions.margin}`);
-    }
+    args.push('--variable', this._formatPandocMargin(pdfOptions.margin));
+
+    kindleOptions.variables.forEach((variable) => {
+      args.push('--variable', variable);
+    });
 
     // 添加 TOC（目录）
     if (markdownPdfConfig.toc !== false) {
@@ -2290,6 +2293,50 @@ export class PandocPdfService {
     }
 
     return args;
+  }
+
+  _getKindlePandocOptions() {
+    const pdfConfig = this.config.pdf || {};
+    if (!pdfConfig.kindleOptimized) {
+      return { pdfOptions: {}, variables: [] };
+    }
+
+    const fontSizePx = Number.parseFloat(pdfConfig.fontSize);
+    const lineHeight = Number.parseFloat(pdfConfig.lineHeight);
+    const variables = ['documentclass=scrartcl'];
+
+    if (Number.isFinite(fontSizePx)) {
+      // KOMA-Script accepts arbitrary sizes through its fontsize key. Passing
+      // a bare `13.5pt` class option is ignored by XeLaTeX.
+      variables.push(`classoption=fontsize=${this._formatDecimal(fontSizePx * 0.75)}pt`);
+    }
+    if (Number.isFinite(lineHeight)) {
+      variables.push(`linestretch=${this._formatDecimal(lineHeight / 1.2)}`);
+    }
+
+    return {
+      pdfOptions: {
+        format: pdfConfig.pageFormat || pdfConfig.format,
+        margin: pdfConfig.margin,
+      },
+      variables,
+    };
+  }
+
+  _formatDecimal(value) {
+    return value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+  }
+
+  _formatPandocMargin(margin) {
+    if (!margin) return 'geometry:margin=1in';
+    if (typeof margin === 'string') return `geometry:margin=${margin}`;
+
+    const sides = ['top', 'right', 'bottom', 'left'];
+    const geometry = sides
+      .filter((side) => margin[side])
+      .map((side) => `${side}=${margin[side]}`)
+      .join(',');
+    return geometry ? `geometry:${geometry}` : 'geometry:margin=1in';
   }
 
   /**
@@ -2518,8 +2565,11 @@ export class PandocPdfService {
 
       if (sectionPages.length === 0) continue;
 
-      // Add section header (H1 for TOC level 1)
+      // Keep the section heading with its first article. A page break before
+      // every article used to leave a nearly blank section-title page.
+      if (parts.length > 0) parts.push('\\newpage\n');
       parts.push(`# ${sectionTitle}\n`);
+      let addedPageCount = 0;
 
       for (const pageInfo of sectionPages) {
         const pageIndex = pageInfo.index;
@@ -2543,10 +2593,11 @@ export class PandocPdfService {
         // Strip leading title from content if it duplicates the injected title
         const cleanedContent = this._stripLeadingTitle(content, title);
 
-        // Add article header (H2 for TOC level 2) and page break
-        parts.push(`\\newpage\n\n## ${title}\n\n${cleanedContent}\n`);
+        const pageBreak = addedPageCount > 0 ? '\\newpage\n\n' : '';
+        parts.push(`${pageBreak}## ${title}\n\n${cleanedContent}\n`);
 
         processedIndices.add(pageIndex);
+        addedPageCount += 1;
       }
     }
 

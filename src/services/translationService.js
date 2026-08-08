@@ -5,6 +5,7 @@ import pLimit from 'p-limit';
 import { createLogger } from '../utils/logger.js';
 import { delay, retry } from '../utils/common.js';
 import { GeminiClient } from './geminiClient.js';
+import { PiClient } from './piClient.js';
 
 /**
  * Translation Service
@@ -29,6 +30,9 @@ export class TranslationService {
     this.bilingual = translationConfig.bilingual ?? false;
     this.targetLanguage = translationConfig.targetLanguage ?? 'Chinese';
     this.concurrency = translationConfig.concurrency ?? 1;
+    this.provider = translationConfig.provider ?? 'gemini';
+    this.model = translationConfig.model ?? null;
+    this.piProvider = translationConfig.piProvider ?? null;
 
     // 超时与重试配置（支持从配置覆盖）
     this.timeoutMs = translationConfig.timeout ?? 60000;
@@ -45,6 +49,8 @@ export class TranslationService {
       targetLanguage: this.targetLanguage,
       bilingual: this.bilingual,
       concurrency: this.concurrency,
+      provider: this.provider,
+      model: this.model,
       timeoutMs: this.timeoutMs,
       maxRetries: this.maxRetries,
       retryDelay: this.retryDelay,
@@ -105,7 +111,8 @@ export class TranslationService {
 
   _getCacheKey(text) {
     const mode = this.bilingual ? 'bilingual' : 'single';
-    const keyBase = `${this.targetLanguage}:${mode}:${text}`;
+    const clientIdentity = [this.provider, this.piProvider || '', this.model || ''].join(':');
+    const keyBase = `${clientIdentity}:${this.targetLanguage}:${mode}:${text}`;
     return crypto.createHash('md5').update(keyBase).digest('hex');
   }
 
@@ -392,6 +399,282 @@ export class TranslationService {
     }
   }
 
+  _createMarkdownTranslationPlan(markdownContent) {
+    const plan = {
+      outputLines: [],
+      segments: [],
+      imageCaptions: [],
+      currentTextLines: [],
+      inFrontmatter: false,
+      inCodeBlock: false,
+    };
+
+    markdownContent
+      .split('\n')
+      .forEach((line, index) => this._processMarkdownLine(plan, line, index));
+    this._flushMarkdownSegment(plan);
+
+    return {
+      outputLines: plan.outputLines,
+      segments: plan.segments,
+      imageCaptions: plan.imageCaptions,
+    };
+  }
+
+  _processMarkdownLine(plan, line, index) {
+    const trimmed = line.trim();
+    if (this._preserveMarkdownLine(plan, line, trimmed, index)) return;
+    if (this._preserveStandaloneImage(plan, line, trimmed)) return;
+
+    const isHeading = /^#{1,6}\s+/.test(trimmed);
+    const isListItem = /^(\*|-|\+)\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed);
+    if ((isHeading || isListItem) && plan.currentTextLines.length > 0) {
+      this._flushMarkdownSegment(plan);
+    }
+    plan.currentTextLines.push(line);
+  }
+
+  _preserveMarkdownLine(plan, line, trimmed, index) {
+    if (index === 0 && trimmed === '---') {
+      plan.inFrontmatter = true;
+      plan.outputLines.push(line);
+      return true;
+    }
+
+    if (plan.inFrontmatter) {
+      plan.outputLines.push(line);
+      if (trimmed === '---') plan.inFrontmatter = false;
+      return true;
+    }
+
+    if (/^(```|~~~)/.test(trimmed)) {
+      this._flushMarkdownSegment(plan);
+      plan.inCodeBlock = !plan.inCodeBlock;
+      plan.outputLines.push(line);
+      return true;
+    }
+
+    if (plan.inCodeBlock) {
+      plan.outputLines.push(line);
+      return true;
+    }
+
+    if (trimmed === '') {
+      this._flushMarkdownSegment(plan);
+      plan.outputLines.push(line);
+      return true;
+    }
+
+    return false;
+  }
+
+  _preserveStandaloneImage(plan, line, trimmed) {
+    const imageMatch = trimmed.match(/^!\[([^\]]*)\]\(([^)]*)\)\s*(\{[^}]*\})?$/);
+    if (!imageMatch) return false;
+
+    this._flushMarkdownSegment(plan);
+    const altText = imageMatch[1]?.trim();
+    if (this.bilingual && altText) {
+      plan.imageCaptions.push({
+        id: `img-${plan.imageCaptions.length}`,
+        altText,
+        outputIndex: plan.outputLines.length,
+      });
+    }
+    plan.outputLines.push(line);
+    return true;
+  }
+
+  _flushMarkdownSegment(plan) {
+    if (plan.currentTextLines.length === 0) return;
+
+    const text = plan.currentTextLines.join('\n').trim();
+    plan.currentTextLines = [];
+    if (!text) return;
+
+    const id = `md-${plan.segments.length}`;
+    plan.segments.push({ id, text });
+    plan.outputLines.push(`__MD_SEGMENT_${id}__`);
+  }
+
+  async _resolveMarkdownSegmentCache(segments) {
+    const translations = {};
+    const uncachedSegments = [];
+
+    for (const segment of segments) {
+      const cached = await this._getFromCache(segment.text);
+      if (cached) translations[segment.id] = cached;
+      else uncachedSegments.push(segment);
+    }
+
+    return { translations, uncachedSegments };
+  }
+
+  _createBatches(items, batchSize) {
+    const batches = [];
+    for (let index = 0; index < items.length; index += batchSize) {
+      batches.push(items.slice(index, index + batchSize));
+    }
+    return batches;
+  }
+
+  async _translateMarkdownSegments(uncachedSegments, translations) {
+    if (uncachedSegments.length === 0) return;
+
+    const batchSize = 5;
+    const batches = this._createBatches(uncachedSegments, batchSize);
+    const state = { completed: 0, failed: 0 };
+    const limit = pLimit(this.concurrency || 1);
+
+    this.logger.info('Starting Markdown translation batches', {
+      totalBatches: batches.length,
+      batchSize,
+      concurrency: this.concurrency,
+    });
+
+    const tasks = batches.map((batch, batchIndex) =>
+      limit(() => this._runMarkdownBatch({ batch, batchIndex, batches, translations, state }))
+    );
+    await this._waitForMarkdownBatches(tasks, batches.length, state);
+  }
+
+  async _runMarkdownBatch({ batch, batchIndex, batches, translations, state }) {
+    const startedAt = Date.now();
+    this.logger.debug(`Starting batch ${batchIndex + 1}/${batches.length}`, {
+      segmentCount: batch.length,
+    });
+
+    try {
+      const timeout = this.timeoutMs || 60000;
+      const result = await this._withTimeout(
+        this._translateBatchWithRetry(batch),
+        timeout,
+        `Batch ${batchIndex + 1} timeout after ${timeout}ms`
+      );
+      await this._cacheTranslationResults(batch, result, translations);
+      state.completed += 1;
+      this.logger.info(`Batch ${batchIndex + 1}/${batches.length} completed`, {
+        elapsed: Date.now() - startedAt,
+        progress: `${state.completed}/${batches.length}`,
+      });
+    } catch (error) {
+      state.failed += 1;
+      this.logger.error(`Batch ${batchIndex + 1}/${batches.length} failed after retries`, {
+        error: error.message,
+        elapsed: Date.now() - startedAt,
+        progress: `${state.completed}/${batches.length}`,
+      });
+    } finally {
+      await delay(200);
+    }
+  }
+
+  async _cacheTranslationResults(items, result, translations) {
+    if (!result) return;
+
+    const itemById = new Map(items.map((item) => [item.id, item]));
+    const cacheWrites = Object.entries(result).flatMap(([id, translated]) => {
+      const originalItem = itemById.get(id);
+      if (!originalItem) return [];
+
+      translations[id] = translated;
+      return [this._saveToCache(originalItem.text, translated)];
+    });
+    await Promise.all(cacheWrites);
+  }
+
+  async _waitForMarkdownBatches(tasks, batchCount, state) {
+    const totalTimeout = (this.timeoutMs || 60000) * batchCount;
+    try {
+      await this._withTimeout(
+        Promise.all(tasks),
+        totalTimeout,
+        `Total translation timeout after ${totalTimeout}ms`
+      );
+      this.logger.info('All Markdown translation batches completed', {
+        completed: state.completed,
+        failed: state.failed,
+        total: batchCount,
+      });
+    } catch (error) {
+      this.logger.warn('Markdown translation batches did not complete in time', {
+        error: error.message,
+        completed: state.completed,
+        failed: state.failed,
+        total: batchCount,
+      });
+    }
+  }
+
+  async _withTimeout(promise, timeout, message) {
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(message)), timeout);
+      timeoutId.unref?.();
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async _translateImageCaptions(imageCaptions) {
+    if (!this.bilingual || imageCaptions.length === 0) return;
+
+    const translations = {};
+    const uncachedCaptions = [];
+    for (const caption of imageCaptions) {
+      const cached = await this._getFromCache(caption.altText);
+      if (cached) translations[caption.id] = cached;
+      else if (caption.altText) uncachedCaptions.push({ id: caption.id, text: caption.altText });
+    }
+
+    if (uncachedCaptions.length > 0) {
+      try {
+        const result = await this._translateBatchWithRetry(uncachedCaptions);
+        await this._cacheTranslationResults(uncachedCaptions, result, translations);
+      } catch (error) {
+        this.logger.warn('Image caption translation failed, will use original captions', {
+          error: error.message,
+          count: uncachedCaptions.length,
+        });
+      }
+    }
+
+    for (const caption of imageCaptions) {
+      if (typeof translations[caption.id] === 'string') {
+        caption.translated = translations[caption.id];
+      }
+    }
+  }
+
+  _renderTranslatedMarkdown({ outputLines, segments, imageCaptions }, translations) {
+    const originalById = new Map(segments.map((segment) => [segment.id, segment.text]));
+    const captionByOutputIndex = new Map(
+      imageCaptions.map((caption) => [caption.outputIndex, caption])
+    );
+
+    const finalLines = outputLines.map((line, index) => {
+      const segmentMatch = line.match(/^__MD_SEGMENT_(.+)__$/);
+      if (segmentMatch) {
+        const original = originalById.get(segmentMatch[1]) || '';
+        const translated = translations[segmentMatch[1]] || original;
+        return this.bilingual ? `${original}\n\n${translated}` : translated;
+      }
+
+      const caption = captionByOutputIndex.get(index);
+      const translatedCaption = caption?.translated?.trim();
+      if (this.bilingual && translatedCaption && translatedCaption !== caption.altText.trim()) {
+        return `${line}\n_${translatedCaption}_`;
+      }
+      return line;
+    });
+
+    return this._normalizeCjkEmphasis(finalLines.join('\n'));
+  }
+
   /**
    * Translate Markdown content instead of DOM.
    * 保留 frontmatter 和代码块，只翻译普通文本段落。
@@ -408,330 +691,25 @@ export class TranslationService {
       return markdownContent;
     }
 
-    const lines = markdownContent.split('\n');
-    const outputLines = [];
-    const segments = [];
-    const imageCaptions = [];
-    let currentTextLines = [];
-    let inFrontmatter = false;
-    let inCodeBlock = false;
-
-    const flushCurrentSegment = () => {
-      if (currentTextLines.length === 0) return;
-      const text = currentTextLines.join('\n').trim();
-      currentTextLines = [];
-      if (!text) return;
-
-      const id = `md-${segments.length}`;
-      segments.push({ id, text });
-      outputLines.push(`__MD_SEGMENT_${id}__`);
-    };
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmed = line.trim();
-
-      // 处理文件开头的 YAML frontmatter
-      if (i === 0 && trimmed === '---') {
-        inFrontmatter = true;
-        outputLines.push(line);
-        continue;
-      }
-
-      if (inFrontmatter) {
-        outputLines.push(line);
-        if (trimmed === '---') {
-          inFrontmatter = false;
-        }
-        continue;
-      }
-
-      // 处理代码块 fence（``` 或 ~~~）
-      const fenceMatch = trimmed.match(/^(```|~~~)/);
-      if (fenceMatch) {
-        flushCurrentSegment();
-        inCodeBlock = !inCodeBlock;
-        outputLines.push(line);
-        continue;
-      }
-
-      if (inCodeBlock) {
-        outputLines.push(line);
-        continue;
-      }
-
-      // 空行：结束当前段落
-      if (trimmed === '') {
-        flushCurrentSegment();
-        outputLines.push(line);
-        continue;
-      }
-
-      // 纯图片行（例如 `![alt](src)` 或 `![alt](src){...}`）在结构上不应生成第二个 `![]()`，
-      // 但在双语模式下我们希望图注也是双语：
-      // - 保持这行图片本身不变（继续作为 Pandoc implicit_figures 的唯一 figure+caption 来源）
-      // - 单独翻译 alt 文本，并在图片下方追加一行译文（例如 `_图 1：..._`）
-      const isStandaloneImage = /^!\[[^\]]*\]\([^)]*\)\s*(\{[^}]*\})?$/.test(trimmed);
-      if (isStandaloneImage) {
-        // 在进入图片行前先结束当前段落
-        flushCurrentSegment();
-
-        if (this.bilingual) {
-          const imgMatch = trimmed.match(/^!\[([^\]]*)\]\(([^)]*)\)\s*(\{[^}]*\})?$/);
-          const altText = imgMatch && imgMatch[1] ? imgMatch[1].trim() : '';
-          if (altText) {
-            const id = `img-${imageCaptions.length}`;
-            imageCaptions.push({
-              id,
-              altText,
-              outputIndex: outputLines.length,
-            });
-          }
-        }
-
-        outputLines.push(line);
-        continue;
-      }
-
-      // 结构性行（标题/列表项）尽量作为单独段落，方便上下文清晰
-      const isHeading = /^#{1,6}\s+/.test(trimmed);
-      const isListItem = /^(\*|-|\+)\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed);
-
-      if ((isHeading || isListItem) && currentTextLines.length > 0) {
-        flushCurrentSegment();
-      }
-
-      // 其他行：加入可翻译段落
-      currentTextLines.push(line);
-    }
-
-    // 结束时刷新残留段落
-    flushCurrentSegment();
-
-    if (segments.length === 0) {
+    const plan = this._createMarkdownTranslationPlan(markdownContent);
+    if (plan.segments.length === 0) {
       return markdownContent;
     }
 
-    // 查缓存
-    const cachedTranslations = {};
-    const uncachedSegments = [];
-
-    for (const seg of segments) {
-      const cached = await this._getFromCache(seg.text);
-      if (cached) {
-        cachedTranslations[seg.id] = cached;
-      } else {
-        uncachedSegments.push(seg);
-      }
-    }
+    const { translations, uncachedSegments } = await this._resolveMarkdownSegmentCache(
+      plan.segments
+    );
 
     this.logger.info('Markdown translation segments', {
-      total: segments.length,
-      fromCache: segments.length - uncachedSegments.length,
+      total: plan.segments.length,
+      fromCache: plan.segments.length - uncachedSegments.length,
       uncached: uncachedSegments.length,
     });
 
-    // 处理未命中缓存的段落
-    if (uncachedSegments.length > 0) {
-      const batchSize = 5; // 减小批次大小，降低超时风险
-      const batches = [];
-      for (let i = 0; i < uncachedSegments.length; i += batchSize) {
-        batches.push(uncachedSegments.slice(i, i + batchSize));
-      }
+    await this._translateMarkdownSegments(uncachedSegments, translations);
 
-      this.logger.info(`Starting Markdown translation batches`, {
-        totalBatches: batches.length,
-        batchSize,
-        concurrency: this.concurrency,
-      });
-
-      const limit = pLimit(this.concurrency || 1);
-      let completedBatches = 0;
-      let failedBatches = 0;
-
-      const tasks = batches.map((batch, batchIndex) =>
-        limit(async () => {
-          const batchStartTime = Date.now();
-          this.logger.debug(`Starting batch ${batchIndex + 1}/${batches.length}`, {
-            segmentCount: batch.length,
-          });
-
-          try {
-            // 为每个批次添加独立的超时保护
-            const batchTimeout = this.timeoutMs || 60000;
-            let batchTimeoutId;
-            const timeoutPromise = new Promise((_, reject) => {
-              batchTimeoutId = setTimeout(
-                () => reject(new Error(`Batch ${batchIndex + 1} timeout after ${batchTimeout}ms`)),
-                batchTimeout
-              );
-              // 避免测试环境中因挂起的定时器导致测试运行器报告 open handles
-              if (batchTimeoutId && typeof batchTimeoutId.unref === 'function') {
-                batchTimeoutId.unref();
-              }
-            });
-
-            const translatePromise = this._translateBatchWithRetry(batch);
-            let res;
-            try {
-              res = await Promise.race([translatePromise, timeoutPromise]);
-            } finally {
-              if (batchTimeoutId) {
-                clearTimeout(batchTimeoutId);
-              }
-            }
-
-            if (res) {
-              const cacheWriteTasks = [];
-              Object.entries(res).forEach(([id, translated]) => {
-                const originalItem = batch.find((item) => item.id === id);
-                if (originalItem) {
-                  cacheWriteTasks.push(this._saveToCache(originalItem.text, translated));
-                  cachedTranslations[id] = translated;
-                }
-              });
-              await Promise.all(cacheWriteTasks);
-            }
-
-            completedBatches++;
-            this.logger.info(`Batch ${batchIndex + 1}/${batches.length} completed`, {
-              elapsed: Date.now() - batchStartTime,
-              progress: `${completedBatches}/${batches.length}`,
-            });
-          } catch (err) {
-            failedBatches++;
-            this.logger.error(`Batch ${batchIndex + 1}/${batches.length} failed after retries`, {
-              error: err.message,
-              elapsed: Date.now() - batchStartTime,
-              progress: `${completedBatches}/${batches.length}`,
-            });
-          } finally {
-            await delay(200);
-          }
-        })
-      );
-
-      // 为整个批处理过程添加总超时
-      const totalTimeout = (this.timeoutMs || 60000) * batches.length;
-      let totalTimeoutId;
-      const totalTimeoutPromise = new Promise((_, reject) => {
-        totalTimeoutId = setTimeout(
-          () => reject(new Error(`Total translation timeout after ${totalTimeout}ms`)),
-          totalTimeout
-        );
-        // 同样避免在测试环境中保持事件循环存活
-        if (totalTimeoutId && typeof totalTimeoutId.unref === 'function') {
-          totalTimeoutId.unref();
-        }
-      });
-
-      try {
-        await Promise.race([Promise.all(tasks), totalTimeoutPromise]);
-        this.logger.info('All Markdown translation batches completed', {
-          completed: completedBatches,
-          failed: failedBatches,
-          total: batches.length,
-        });
-      } catch (err) {
-        this.logger.warn('Markdown translation batches did not complete in time', {
-          error: err.message,
-          completed: completedBatches,
-          failed: failedBatches,
-          total: batches.length,
-        });
-        // 即使超时，也继续处理已完成的翻译
-      } finally {
-        if (totalTimeoutId) {
-          clearTimeout(totalTimeoutId);
-        }
-      }
-    }
-
-    // 如果是双语模式，为图片 alt 文本单独做一次翻译，用于在图片下方追加译文图注
-    const captionTranslations = {};
-    if (this.bilingual && imageCaptions.length > 0) {
-      const uncachedCaptionSegs = [];
-
-      for (const cap of imageCaptions) {
-        const cached = await this._getFromCache(cap.altText);
-        if (cached) {
-          captionTranslations[cap.id] = cached;
-        } else if (cap.altText) {
-          uncachedCaptionSegs.push({ id: cap.id, text: cap.altText });
-        }
-      }
-
-      if (uncachedCaptionSegs.length > 0) {
-        try {
-          const result = await this._translateBatchWithRetry(uncachedCaptionSegs);
-          if (result) {
-            const cacheWriteTasks = [];
-            Object.entries(result).forEach(([id, translated]) => {
-              const originalItem = uncachedCaptionSegs.find((item) => item.id === id);
-              if (originalItem) {
-                cacheWriteTasks.push(this._saveToCache(originalItem.text, translated));
-              }
-              captionTranslations[id] = translated;
-            });
-            await Promise.all(cacheWriteTasks);
-          }
-        } catch (err) {
-          this.logger.warn('Image caption translation failed, will use original captions', {
-            error: err.message,
-            count: uncachedCaptionSegs.length,
-          });
-        }
-      }
-
-      // 将译文挂回 imageCaptions，方便重建 Markdown 时插入
-      for (const cap of imageCaptions) {
-        const translated = captionTranslations[cap.id];
-        if (typeof translated === 'string') {
-          cap.translated = translated;
-        }
-      }
-    }
-
-    // 重建 Markdown：用翻译结果替换占位符，并在图片下方追加译文图注（仅双语模式）
-    const idToOriginal = {};
-    for (const seg of segments) {
-      idToOriginal[seg.id] = seg.text;
-    }
-
-    const finalLines = outputLines.map((line, index) => {
-      const match = line.match(/^__MD_SEGMENT_(.+)__$/);
-      if (match) {
-        const id = match[1];
-        const original = idToOriginal[id] || '';
-        const translated = cachedTranslations[id] || original;
-
-        if (this.bilingual) {
-          return `${original}\n\n${translated}`;
-        }
-
-        return translated;
-      }
-
-      // 为图片行追加一行译文图注：
-      // ![Figure 1: ...](/img)
-      // _图 1：..._
-      if (this.bilingual && imageCaptions.length > 0) {
-        const cap = imageCaptions.find((c) => c.outputIndex === index);
-        if (cap && typeof cap.translated === 'string') {
-          const translatedCaption = cap.translated.trim();
-          if (translatedCaption && translatedCaption !== cap.altText.trim()) {
-            return `${line}\n_${translatedCaption}_`;
-          }
-        }
-      }
-
-      return line;
-    });
-
-    // 在最终返回前，按规范将中文句子内部的 `_字_` 形式转换为 `*字*`
-    // 这是 Pandoc 和 CommonMark 推荐的写法，可以避免 intraword underscore
-    // 被忽略为普通字符，从而确保中文斜体在 PDF 中正常生效。
-    return this._normalizeCjkEmphasis(finalLines.join('\n'));
+    await this._translateImageCaptions(plan.imageCaptions);
+    return this._renderTranslatedMarkdown(plan, translations);
   }
 
   /**
@@ -778,17 +756,29 @@ Style guidelines:
 Output ONLY the final JSON object with translated values.
 	`;
 
-    if (!this.client) {
-      this.client = new GeminiClient({
-        timeoutMs: this.timeoutMs,
-        logger: this.logger,
-      });
-    }
+    if (!this.client) this.client = this._createClient();
 
     return this.client.translateJson({
       instructions,
       inputMap,
     });
+  }
+
+  _createClient() {
+    const options = {
+      timeoutMs: this.timeoutMs,
+      logger: this.logger,
+    };
+
+    if (this.provider === 'pi') {
+      return new PiClient({
+        ...options,
+        model: this.model,
+        provider: this.piProvider,
+      });
+    }
+
+    return new GeminiClient(options);
   }
 
   /**
