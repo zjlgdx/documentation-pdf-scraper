@@ -2178,7 +2178,9 @@ export class PandocPdfService {
 
   _convertInlineCodePath(code, marker) {
     const shouldConvert =
-      code.includes('|') || (code.length >= 24 && /[\\/._:-]/.test(code));
+      code.includes('|')
+      || (code.length >= 24 && /[\\/._:-]/.test(code))
+      || (code.length >= 16 && !/[\\/._:\s-]/.test(code) && /[a-z0-9][A-Z]/.test(code));
 
     if (!shouldConvert) {
       return `${marker}${code}${marker}`;
@@ -2191,7 +2193,12 @@ export class PandocPdfService {
     const escaped = [];
     const breakAfter = new Set(['/', '\\', '.', '_', '-', ':', '|', ',', '=', '{', '}']);
 
-    for (const char of code) {
+    for (let index = 0; index < code.length; index++) {
+      const char = code[index];
+      if (index > 0 && /[a-z0-9]/.test(code[index - 1]) && /[A-Z]/.test(char)) {
+        escaped.push('\\allowbreak{}');
+      }
+
       switch (char) {
         case '\\':
           escaped.push('\\textbackslash{}');

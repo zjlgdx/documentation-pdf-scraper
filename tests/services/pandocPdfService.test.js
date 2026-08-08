@@ -414,6 +414,16 @@ describe('PandocPdfService', () => {
       );
     });
 
+    it('should add break opportunities to long camelCase inline configuration keys', () => {
+      const result = service._cleanMarkdownContent(
+        'Require approval with `isolatePeerMachines` before sending.'
+      );
+
+      expect(result).toContain(
+        '\\texttt{isolate\\allowbreak{}Peer\\allowbreak{}Machines}'
+      );
+    });
+
     it('should preserve sandbox approval tables with PDF-friendly column widths', () => {
       const input = [
         '| Intent | Flags | Effect |',
