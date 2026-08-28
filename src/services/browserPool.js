@@ -225,7 +225,7 @@ export class BrowserPool extends EventEmitter {
             const browser = this.availableBrowsers.shift();
 
             // 检查浏览器是否还连接
-            if (!browser.isConnected()) {
+            if (!browser.connected) {
               this.logger?.warn('发现断开的浏览器，尝试重新创建');
               await this.handleBrowserDisconnect(browser);
 
@@ -310,7 +310,7 @@ export class BrowserPool extends EventEmitter {
     }
 
     // 检查浏览器是否还连接
-    if (browser.isConnected()) {
+    if (browser.connected) {
       this.availableBrowsers.push(browser);
 
       this.emit('browser-released', {
@@ -431,7 +431,7 @@ export class BrowserPool extends EventEmitter {
    * 清理无效的浏览器实例
    */
   async cleanup() {
-    const invalidBrowsers = this.browsers.filter((browser) => !browser.isConnected());
+    const invalidBrowsers = this.browsers.filter((browser) => !browser.connected);
 
     if (invalidBrowsers.length > 0) {
       this.logger?.info(`清理 ${invalidBrowsers.length} 个无效浏览器实例`);

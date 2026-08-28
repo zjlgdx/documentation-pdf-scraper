@@ -20,7 +20,7 @@ describe('BrowserPool', () => {
     return {
       on: vi.fn(),
       close: vi.fn(),
-      isConnected: vi.fn().mockReturnValue(true),
+      connected: true,
       process: vi.fn().mockReturnValue({ pid: pid + browserCount++ }),
     };
   };
@@ -137,7 +137,7 @@ describe('BrowserPool', () => {
       const browser = await browserPool.createBrowser();
 
       expect(browser).toHaveProperty('close');
-      expect(browser).toHaveProperty('isConnected');
+      expect(browser.connected).toBe(true);
       expect(browser).toHaveProperty('on');
       expect(browser).toHaveProperty('process');
       expect(puppeteer.launch).toHaveBeenCalledWith(
@@ -184,7 +184,7 @@ describe('BrowserPool', () => {
       const browser = await browserPool.getBrowser();
 
       expect(browser).toHaveProperty('close');
-      expect(browser).toHaveProperty('isConnected');
+      expect(browser.connected).toBe(true);
       expect(browserPool.availableBrowsers).toHaveLength(1);
       expect(browserPool.busyBrowsers).toHaveLength(1);
       expect(browserPool.stats.totalRequests).toBe(1);
@@ -220,6 +220,40 @@ describe('BrowserPool', () => {
     });
   });
 
+  describe('waitForAvailableBrowser', () => {
+    beforeEach(async () => {
+      await browserPool.initialize();
+    });
+
+    it('should acquire a connected browser while waiting', async () => {
+      const browser = browserPool.availableBrowsers[0];
+
+      await expect(browserPool.waitForAvailableBrowser()).resolves.toBe(browser);
+
+      expect(browserPool.busyBrowsers).toContain(browser);
+      expect(browserPool.availableBrowsers).not.toContain(browser);
+    });
+
+    it('should skip a disconnected browser while waiting', async () => {
+      vi.useFakeTimers();
+      try {
+        const [disconnectedBrowser, connectedBrowser] = browserPool.availableBrowsers;
+        disconnectedBrowser.connected = false;
+
+        const result = expect(browserPool.waitForAvailableBrowser()).resolves.toBe(
+          connectedBrowser
+        );
+        await Promise.all([result, vi.advanceTimersByTimeAsync(500)]);
+
+        expect(browserPool.disconnectedBrowsers).toContain(disconnectedBrowser);
+        expect(browserPool.busyBrowsers).not.toContain(disconnectedBrowser);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('releaseBrowser', () => {
     beforeEach(async () => {
       await browserPool.initialize();
@@ -237,11 +271,12 @@ describe('BrowserPool', () => {
 
     it('should handle disconnected browsers', async () => {
       const browser = await browserPool.getBrowser();
-      browser.isConnected.mockReturnValue(false);
+      browser.connected = false;
 
       await browserPool.releaseBrowser(browser);
 
       expect(browserPool.disconnectedBrowsers).toHaveLength(1);
+      expect(browserPool.availableBrowsers).not.toContain(browser);
     });
 
     it('should emit browser-released event', async () => {
@@ -258,6 +293,21 @@ describe('BrowserPool', () => {
           }),
         })
       );
+    });
+  });
+
+  describe('cleanup', () => {
+    it('should replace only disconnected browsers', async () => {
+      await browserPool.initialize();
+      const [disconnectedBrowser, connectedBrowser] = browserPool.browsers;
+      disconnectedBrowser.connected = false;
+      const disconnectHandler = vi.spyOn(browserPool, 'handleBrowserDisconnect');
+
+      await browserPool.cleanup();
+
+      expect(disconnectHandler).toHaveBeenCalledExactlyOnceWith(disconnectedBrowser);
+      expect(browserPool.browsers).not.toContain(disconnectedBrowser);
+      expect(browserPool.browsers).toContain(connectedBrowser);
     });
   });
 
