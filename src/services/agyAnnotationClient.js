@@ -1,9 +1,13 @@
 import { ValidationError } from '../utils/errors.js';
 
+export const AGY_ANNOTATION_ERROR_REASONS = Object.freeze({
+  MISSING_STRUCTURED_OUTPUT: 'missing_structured_output',
+});
+
 export class AgyAnnotationClient {
   constructor(options = {}) {
     this.processRunner = options.processRunner;
-    this.model = options.model || 'gemini-3.7-flash-high';
+    this.model = options.model || 'gemini-3.7-flash-medium';
     this.timeoutMs = options.timeoutMs ?? 300000;
   }
 
@@ -18,8 +22,6 @@ export class AgyAnnotationClient {
       prompt,
       '--model',
       this.model,
-      '--mode',
-      'plan',
       '--sandbox',
       '--print-timeout',
       `${printTimeoutMinutes}m`,
@@ -34,9 +36,20 @@ export class AgyAnnotationClient {
     });
 
     const envelope = parseJson(stdout, 'AGY output');
-    const structured = envelope.structured_output ?? envelope.structuredOutput;
+    const isObjectEnvelope = envelope && typeof envelope === 'object' && !Array.isArray(envelope);
+    const structured = isObjectEnvelope
+      ? envelope.structured_output ?? envelope.structuredOutput
+      : null;
     if (structured == null) {
-      throw new ValidationError('AGY output did not contain structured output for annotations');
+      throw new ValidationError(
+        'AGY output did not contain structured output for annotations',
+        {
+          reason: AGY_ANNOTATION_ERROR_REASONS.MISSING_STRUCTURED_OUTPUT,
+          status: typeof envelope?.status === 'string' ? envelope.status : null,
+          keys: isObjectEnvelope ? Object.keys(envelope).sort() : [],
+          responseLength: typeof envelope?.response === 'string' ? envelope.response.length : 0,
+        }
+      );
     }
     return typeof structured === 'string'
       ? parseJson(structured, 'AGY structured output')

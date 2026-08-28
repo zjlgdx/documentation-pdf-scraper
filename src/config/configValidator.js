@@ -612,7 +612,7 @@ const configSchema = Joi.object({
     model: Joi.string()
       .trim()
       .min(1)
-      .default('gemini-3.7-flash-high')
+      .default('gemini-3.7-flash-medium')
       .description('Primary annotation model'),
 
     level: Joi.string()
@@ -629,6 +629,10 @@ const configSchema = Joi.object({
       .valid('Simplified Chinese')
       .default('Simplified Chinese')
       .description('Annotation explanation language'),
+
+    includeIPA: Joi.boolean()
+      .default(false)
+      .description('Add verified General American IPA to single-word vocabulary notes'),
 
     timeout: Joi.number()
       .integer()

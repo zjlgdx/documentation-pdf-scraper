@@ -231,6 +231,13 @@ describe('PandocPdfService', () => {
       );
     });
 
+    it('should route every en-US dictionary IPA symbol through DejaVu Sans', () => {
+      expect(pandocHeader).toContain('\\newfontfamily\\scraperIPA{DejaVu Sans}');
+      for (const symbol of [...'æðŋɑɔəɛɝɡɪɫɹʃʊʒˈˌθ']) {
+        expect(pandocHeader).toContain(`\\newunicodechar{${symbol}}`);
+      }
+    });
+
     it('should apply publication-quality TOC typography and spacing', () => {
       const header = pandocHeader;
 

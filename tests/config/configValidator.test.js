@@ -406,10 +406,11 @@ describe('ConfigValidator', () => {
       expect(result.config.annotations).toMatchObject({
         enabled: true,
         provider: 'agy',
-        model: 'gemini-3.7-flash-high',
+        model: 'gemini-3.7-flash-medium',
         level: 'high-school',
         density: 'standard',
         explanationLanguage: 'Simplified Chinese',
+        includeIPA: false,
         timeout: 300000,
         fallback: {
           provider: 'codex',

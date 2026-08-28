@@ -4,8 +4,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import { createLogger } from '../utils/logger.js';
 import { ProcessingError, ValidationError } from '../utils/errors.js';
-import { AgyAnnotationClient } from './agyAnnotationClient.js';
+import {
+  AGY_ANNOTATION_ERROR_REASONS,
+  AgyAnnotationClient,
+} from './agyAnnotationClient.js';
 import { CodexAnnotationClient } from './codexAnnotationClient.js';
+import { IpaPronunciationService } from './ipaPronunciationService.js';
 import {
   ANNOTATION_CONTRACT_VERSION,
   ANNOTATION_DENSITY_LIMITS,
@@ -37,6 +41,7 @@ export class AnnotationService {
     this.level = this.annotationConfig.level || 'high-school';
     this.density = this.annotationConfig.density || 'standard';
     this.explanationLanguage = this.annotationConfig.explanationLanguage || 'Simplified Chinese';
+    this.includeIPA = this.annotationConfig.includeIPA ?? false;
     this.maxAnnotations = ANNOTATION_DENSITY_LIMITS[this.density] || 2;
     this.logger = options.logger || createLogger('AnnotationService');
     this.cacheDir = options.cacheDir
@@ -58,6 +63,11 @@ export class AnnotationService {
       model: fallback.model,
       reasoningEffort: fallback.reasoningEffort,
       timeoutMs: this.annotationConfig.timeout,
+    });
+    this.ipaService = options.ipaService || new IpaPronunciationService({
+      enabled: this.includeIPA,
+      cacheDir: path.join(this.cacheDir, 'ipa'),
+      logger: this.logger,
     });
   }
 
@@ -92,7 +102,28 @@ export class AnnotationService {
       }
     }
 
+    await this._enrichResultsWithIpa(results);
     return this._renderMarkdown(markdown, segments, results);
+  }
+
+  async _enrichResultsWithIpa(results) {
+    if (!this.includeIPA) return;
+    const words = new Set();
+    for (const annotations of results.values()) {
+      for (const annotation of annotations) {
+        if (annotation.type === 'word') words.add(annotation.quote);
+      }
+    }
+    const pronunciations = new Map(await Promise.all([...words].map(async (word) => [
+      word,
+      await this.ipaService.lookup(word),
+    ])));
+    for (const [segmentId, annotations] of results) {
+      results.set(segmentId, annotations.map((annotation) => {
+        const ipa = annotation.type === 'word' ? pronunciations.get(annotation.quote) : null;
+        return ipa ? { ...annotation, ipa } : annotation;
+      }));
+    }
   }
 
   _extractSegments(markdown) {
@@ -151,7 +182,7 @@ export class AnnotationService {
     const prompt = this._buildPrompt(batch);
     let primaryError;
     try {
-      const response = await this.primaryClient.annotate({ prompt, responseSchema, segments: batch });
+      const response = await this._annotateWithPrimaryRetry({ prompt, responseSchema, batch });
       const validated = { byId: this._validateBatchResponse(batch, response), provider: 'agy' };
       this.logger.info('Annotation batch validated', {
         provider: validated.provider,
@@ -183,6 +214,25 @@ export class AnnotationService {
         fallback: fallbackError.message,
         }
       );
+    }
+  }
+
+  async _annotateWithPrimaryRetry({ prompt, responseSchema, batch }) {
+    const input = { prompt, responseSchema, segments: batch };
+    try {
+      return await this.primaryClient.annotate(input);
+    } catch (error) {
+      if (error?.details?.reason
+          !== AGY_ANNOTATION_ERROR_REASONS.MISSING_STRUCTURED_OUTPUT) {
+        throw error;
+      }
+      this.logger.warn('AGY structured output missing; retrying primary once', {
+        provider: 'agy',
+        status: error.details.status,
+        keys: error.details.keys,
+        responseLength: error.details.responseLength,
+      });
+      return this.primaryClient.annotate(input);
     }
   }
 
@@ -278,8 +328,9 @@ export class AnnotationService {
       `${prefix}>`,
     ];
     annotations.forEach((annotation) => {
+      const ipaLabel = annotation.ipa ? ` · 美式 IPA ${escapeMarkdown(annotation.ipa)}` : '';
       lines.push(
-        `${prefix}> - **${escapeMarkdown(annotation.quote)}**（${TYPE_LABELS[annotation.type]}）：${escapeMarkdown(annotation.explanationZh)}`,
+        `${prefix}> - **${escapeMarkdown(annotation.quote)}**（${TYPE_LABELS[annotation.type]}${ipaLabel}）：${escapeMarkdown(annotation.explanationZh)}`,
         `${prefix}>   *Example:* ${escapeMarkdown(annotation.exampleEn)}`
       );
     });
@@ -291,7 +342,7 @@ export class AnnotationService {
     return createHash('sha256').update(JSON.stringify({
       text: segment.text,
       provider: this.annotationConfig.provider || 'agy',
-      model: this.annotationConfig.model || 'gemini-3.7-flash-high',
+      model: this.annotationConfig.model || 'gemini-3.7-flash-medium',
       fallbackProvider: fallback.provider || 'codex',
       fallbackModel: fallback.model || 'gpt-5.6-luna',
       fallbackReasoningEffort: fallback.reasoningEffort || 'xhigh',

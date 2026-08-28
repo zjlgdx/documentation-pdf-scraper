@@ -8,6 +8,8 @@ The verifier works under the hood while the original English paragraph remains u
 >
 > - **under the hood**（惯用语）：表示系统内部实际发生的事情。
 >   *Example:* Under the hood, the app validates every file.
+> - **opaque**（生词 · 美式 IPA /oʊˈpeɪk/）：表示难以理解或不透明的。
+>   *Example:* The configuration format can feel opaque at first.
 
 Use `⏸ plan mode on` to pause; ✅ Include and ❌ Exclude must remain visible.
 

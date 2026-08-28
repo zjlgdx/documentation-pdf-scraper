@@ -31,7 +31,7 @@ export function createAnnotationResponseSchema(maxAnnotations, segmentCount) {
           additionalProperties: false,
           required: ['segmentId', 'annotations'],
           properties: {
-            segmentId: { type: 'string', minLength: 1 },
+            segmentId: { type: 'string' },
             annotations: {
               type: 'array',
               maxItems: maxAnnotations,
@@ -40,11 +40,11 @@ export function createAnnotationResponseSchema(maxAnnotations, segmentCount) {
                 additionalProperties: false,
                 required: ['quote', 'occurrence', 'type', 'explanationZh', 'exampleEn'],
                 properties: {
-                  quote: { type: 'string', minLength: 1, maxLength: 120 },
+                  quote: { type: 'string' },
                   occurrence: { type: 'integer', minimum: 1 },
                   type: { type: 'string', enum: ANNOTATION_TYPES },
-                  explanationZh: { type: 'string', minLength: 1, maxLength: 240 },
-                  exampleEn: { type: 'string', minLength: 1, maxLength: 240 },
+                  explanationZh: { type: 'string' },
+                  exampleEn: { type: 'string' },
                 },
               },
             },

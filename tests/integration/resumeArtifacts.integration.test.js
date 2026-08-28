@@ -59,9 +59,10 @@ describe('resume identity and batch artifacts', () => {
       annotations: {
         enabled: true,
         provider: 'agy',
-        model: 'gemini-3.7-flash-high',
+        model: 'gemini-3.7-flash-medium',
         level: 'high-school',
         density: 'standard',
+        includeIPA: true,
       },
     };
     await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });
@@ -80,6 +81,12 @@ describe('resume identity and batch artifacts', () => {
     expect(await state.prepareRun(urls, {
       ...annotatedConfig,
       annotations: { ...annotatedConfig.annotations, model: 'new-model' },
+    }, { annotationContractVersion: 'test-v1' })).toBe(false);
+
+    await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });
+    expect(await state.prepareRun(urls, {
+      ...annotatedConfig,
+      annotations: { ...annotatedConfig.annotations, includeIPA: false },
     }, { annotationContractVersion: 'test-v1' })).toBe(false);
 
     await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });

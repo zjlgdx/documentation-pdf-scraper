@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnnotationService } from '../../src/services/annotationService.js';
+import { ValidationError } from '../../src/utils/errors.js';
 
 const logger = {
   debug: vi.fn(),
@@ -42,7 +43,7 @@ describe('AnnotationService', () => {
         annotations: {
           enabled: true,
           provider: 'agy',
-          model: 'gemini-3.7-flash-high',
+          model: 'gemini-3.7-flash-medium',
           level: 'high-school',
           density: 'standard',
           explanationLanguage: 'Simplified Chinese',
@@ -120,6 +121,27 @@ describe('AnnotationService', () => {
     expect(result).not.toContain('\n\n\n- This gets the ball rolling');
   });
 
+  it('adds verified American IPA only to single-word vocabulary annotations', async () => {
+    const ipaService = { lookup: vi.fn().mockResolvedValue('/oʊˈpeɪk/') };
+    primaryClient.annotate.mockImplementation(({ segments }) => responseFor(segments, new Map([
+      [segments[0].text, [{
+        quote: 'opaque',
+        occurrence: 1,
+        type: 'word',
+        explanationZh: '表示难以理解或不透明的。',
+        exampleEn: 'The configuration format can feel opaque at first.',
+      }]],
+    ])));
+
+    const result = await createService({
+      annotations: { includeIPA: true },
+      ipaService,
+    }).annotateMarkdown('The opaque configuration becomes clearer with practice.\n');
+
+    expect(ipaService.lookup).toHaveBeenCalledWith('opaque');
+    expect(result).toContain('**opaque**（生词 · 美式 IPA /oʊˈpeɪk/）');
+  });
+
   it('treats a complete empty response as valid and does not call the fallback', async () => {
     primaryClient.annotate.mockImplementation(({ segments }) => responseFor(segments));
     const markdown = 'This sentence is straightforward for university readers.\n';
@@ -128,6 +150,51 @@ describe('AnnotationService', () => {
       annotations: { level: 'university' },
     }).annotateMarkdown(markdown)).resolves.toBe(markdown);
     expect(fallbackClient.annotate).not.toHaveBeenCalled();
+  });
+
+  it('retries AGY once when its envelope omits structured output', async () => {
+    primaryClient.annotate
+      .mockRejectedValueOnce(new ValidationError('Missing structured output', {
+        reason: 'missing_structured_output',
+        status: 'SUCCESS',
+        keys: ['response', 'status'],
+        responseLength: 42,
+      }))
+      .mockImplementationOnce(({ segments }) => responseFor(segments));
+
+    const markdown = 'This sentence is straightforward for high-school readers.\n';
+    await expect(createService().annotateMarkdown(markdown)).resolves.toBe(markdown);
+
+    expect(primaryClient.annotate).toHaveBeenCalledTimes(2);
+    expect(fallbackClient.annotate).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'AGY structured output missing; retrying primary once',
+      expect.objectContaining({ responseLength: 42 })
+    );
+  });
+
+  it('falls back after exactly one missing-structured-output retry', async () => {
+    primaryClient.annotate.mockRejectedValue(new ValidationError('Missing structured output', {
+      reason: 'missing_structured_output',
+    }));
+    fallbackClient.annotate.mockImplementation(({ segments }) => responseFor(segments));
+
+    const markdown = 'This sentence is straightforward for high-school readers.\n';
+    await expect(createService().annotateMarkdown(markdown)).resolves.toBe(markdown);
+
+    expect(primaryClient.annotate).toHaveBeenCalledTimes(2);
+    expect(fallbackClient.annotate).toHaveBeenCalledOnce();
+  });
+
+  it('does not retry AGY for a process failure', async () => {
+    primaryClient.annotate.mockRejectedValue(new Error('AGY process failed'));
+    fallbackClient.annotate.mockImplementation(({ segments }) => responseFor(segments));
+
+    const markdown = 'This sentence is straightforward for high-school readers.\n';
+    await expect(createService().annotateMarkdown(markdown)).resolves.toBe(markdown);
+
+    expect(primaryClient.annotate).toHaveBeenCalledOnce();
+    expect(fallbackClient.annotate).toHaveBeenCalledOnce();
   });
 
   it('falls back once when the primary anchors inside inline code', async () => {

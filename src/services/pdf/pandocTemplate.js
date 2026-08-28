@@ -7,12 +7,33 @@ const symbolFontDirectory = fileURLToPath(new URL('../../../assets/fonts/', impo
 export const pandocHeader = String.raw`\usepackage{fvextra}
 \setmonofont{DejaVuSansMono}[Scale=MatchLowercase,BoldFont=DejaVuSansMono-Bold,ItalicFont=DejaVuSansMono-Oblique,BoldItalicFont=DejaVuSansMono-BoldOblique]
 \newfontfamily\scraperSymbols{DocumentationSymbols.ttf}[Path={${symbolFontDirectory}}]
+\newfontfamily\scraperIPA{DejaVu Sans}
 \usepackage{newunicodechar}
 \newunicodechar{⏸}{{\scraperSymbols\char"23F8}}
 \newunicodechar{✅}{{\scraperSymbols\char"2705}}
 \newunicodechar{❌}{{\scraperSymbols\char"274C}}
 \newunicodechar{📊}{{\scraperSymbols\char"1F4CA}}
 \newunicodechar{📁}{{\scraperSymbols\char"1F4C1}}
+% The pinned en-US pronunciation dictionary uses this complete IPA symbol set.
+% Keep body typography unchanged and route only those glyphs to a portable font.
+\newunicodechar{æ}{{\scraperIPA æ}}
+\newunicodechar{ð}{{\scraperIPA ð}}
+\newunicodechar{ŋ}{{\scraperIPA ŋ}}
+\newunicodechar{ɑ}{{\scraperIPA ɑ}}
+\newunicodechar{ɔ}{{\scraperIPA ɔ}}
+\newunicodechar{ə}{{\scraperIPA ə}}
+\newunicodechar{ɛ}{{\scraperIPA ɛ}}
+\newunicodechar{ɝ}{{\scraperIPA ɝ}}
+\newunicodechar{ɡ}{{\scraperIPA ɡ}}
+\newunicodechar{ɪ}{{\scraperIPA ɪ}}
+\newunicodechar{ɫ}{{\scraperIPA ɫ}}
+\newunicodechar{ɹ}{{\scraperIPA ɹ}}
+\newunicodechar{ʃ}{{\scraperIPA ʃ}}
+\newunicodechar{ʊ}{{\scraperIPA ʊ}}
+\newunicodechar{ʒ}{{\scraperIPA ʒ}}
+\newunicodechar{ˈ}{{\scraperIPA ˈ}}
+\newunicodechar{ˌ}{{\scraperIPA ˌ}}
+\newunicodechar{θ}{{\scraperIPA θ}}
 \fvset{codes*={\catcode"23F8=\active\catcode"2705=\active\catcode"274C=\active\catcode"1F4CA=\active\catcode"1F4C1=\active}}
 \RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines,breakanywhere,fontsize=\small}
 \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,fontsize=\small,commandchars=\\\{\}}

@@ -134,8 +134,9 @@ retained. Translation selects `_translated.md`; English learning annotations sel
 
 Annotations require the Markdown/Pandoc workflow and are mutually exclusive with
 full translation in V1. They use existing subscription OAuth sessions: AGY with
-Gemini Flash is primary, while Codex Luna `xhigh` is tried once only when the
-primary process or deterministic response validation fails. No API key is stored.
+Gemini Flash `medium` is primary. AGY is retried once only when its successful
+envelope omits structured output; Codex Luna `xhigh` remains the fallback for a
+primary process or deterministic response validation failure. No API key is stored.
 
 ```json
 {
@@ -144,7 +145,8 @@ primary process or deterministic response validation fails. No API key is stored
     "level": "high-school",
     "density": "standard",
     "provider": "agy",
-    "model": "gemini-3.7-flash-high",
+    "model": "gemini-3.7-flash-medium",
+    "includeIPA": true,
     "fallback": {
       "provider": "codex",
       "model": "gpt-5.6-luna",
@@ -158,6 +160,13 @@ primary process or deterministic response validation fails. No API key is stored
 `light`, `standard`, or `dense`. Paragraphs, code, links, tables, headings and
 frontmatter remain byte-for-byte unchanged; generated notes are adjacent Markdown
 blockquotes. Valid empty annotations are accepted and do not invoke the fallback.
+
+`includeIPA` is opt-in (`false` by default). When enabled, single-word `word`
+annotations are enriched from a checksum-pinned [General American IPA dictionary](https://github.com/open-dict-data/ipa-dict)
+and rendered as “美式 IPA”. The 3.2 MB source is downloaded lazily and cached;
+phrases, unknown words, and entries with multiple pronunciations are omitted rather
+than guessed. The model never generates pronunciation text. See
+`THIRD_PARTY_NOTICES.md` for provenance and licensing.
 
 ### PDF verification
 
