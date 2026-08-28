@@ -105,7 +105,10 @@ test:
 	npm test
 	$(UV_PYTHON) -m unittest discover -s tests/python -v
 
-.PHONY: pdf-smoke verify-pdf
+.PHONY: pdf-smoke verify-pdf doctor
+doctor:
+	node scripts/doctor.js
+
 pdf-smoke:
 	node scripts/pdf-smoke.js
 
@@ -150,7 +153,8 @@ clean:
 
 # Clean caches and metadata without removing generated PDFs
 clean-cache:
-	@echo "Cleaning translation cache and metadata (keeping PDFs)..."
+	@echo "Cleaning default HTTP/translation caches and metadata (keeping PDFs)..."
+	rm -rf .cache/http
 	rm -rf .temp
 	rm -rf pdfs/metadata/*
 
@@ -182,105 +186,25 @@ python-info: check-venv
 CONFIG_SCRIPT = scripts/use-kindle-config.js
 DOC_TARGET_SCRIPT = scripts/use-doc-target.js
 
-# Generate PDFs for Kindle 7-inch
+# Per-run profiles preserve config.json and reuse validated acquisition artifacts.
 kindle7:
-	@set -e; \
-	backup_file=$$(mktemp); \
-	cp config.json "$$backup_file"; \
-	trap 'cp "$$backup_file" config.json >/dev/null 2>&1; rm -f "$$backup_file"' EXIT; \
-	echo "🔧 切换到Kindle 7英寸配置..."; \
-	node $(CONFIG_SCRIPT) use kindle7; \
-	echo "🧹 清理旧文件..."; \
-	rm -rf pdfs/finalPdf-kindle7; \
-	echo "📄 生成Kindle 7英寸优化PDF..."; \
-	node src/app.js; \
-	echo "✅ Kindle 7英寸PDF生成完成"; \
-	echo "📍 PDF位置: pdfs/finalPdf-kindle7/"
+	PDF_PROFILE=kindle7 node src/app.js
 
-# Generate PDFs for Kindle Paperwhite
 kindle-paperwhite:
-	@set -e; \
-	backup_file=$$(mktemp); \
-	cp config.json "$$backup_file"; \
-	trap 'cp "$$backup_file" config.json >/dev/null 2>&1; rm -f "$$backup_file"' EXIT; \
-	echo "🔧 切换到Kindle Paperwhite配置..."; \
-	node $(CONFIG_SCRIPT) use paperwhite; \
-	echo "🧹 清理旧文件..."; \
-	rm -rf pdfs/finalPdf-paperwhite; \
-	echo "📄 生成Kindle Paperwhite优化PDF..."; \
-	node src/app.js; \
-	echo "✅ Kindle Paperwhite PDF生成完成"; \
-	echo "📍 PDF位置: pdfs/finalPdf-paperwhite/"
+	PDF_PROFILE=kindle-paperwhite node src/app.js
 
-# Generate PDFs for Kindle Oasis
 kindle-oasis:
-	@set -e; \
-	backup_file=$$(mktemp); \
-	cp config.json "$$backup_file"; \
-	trap 'cp "$$backup_file" config.json >/dev/null 2>&1; rm -f "$$backup_file"' EXIT; \
-	echo "🔧 切换到Kindle Oasis配置..."; \
-	node $(CONFIG_SCRIPT) use oasis; \
-	echo "🧹 清理旧文件..."; \
-	rm -rf pdfs/finalPdf-oasis; \
-	echo "📄 生成Kindle Oasis优化PDF..."; \
-	node src/app.js; \
-	echo "✅ Kindle Oasis PDF生成完成"; \
-	echo "📍 PDF位置: pdfs/finalPdf-oasis/"
+	PDF_PROFILE=kindle-oasis node src/app.js
 
-# Generate PDFs for Kindle Scribe
 kindle-scribe:
-	@set -e; \
-	backup_file=$$(mktemp); \
-	cp config.json "$$backup_file"; \
-	trap 'cp "$$backup_file" config.json >/dev/null 2>&1; rm -f "$$backup_file"' EXIT; \
-	echo "🔧 切换到Kindle Scribe配置..."; \
-	node $(CONFIG_SCRIPT) use scribe; \
-	echo "🧹 清理旧文件..."; \
-	rm -rf pdfs/finalPdf-scribe; \
-	echo "📄 生成Kindle Scribe优化PDF..."; \
-	node src/app.js; \
-	echo "✅ Kindle Scribe PDF生成完成"; \
-	echo "📍 PDF位置: pdfs/finalPdf-scribe/"
+	PDF_PROFILE=kindle-scribe node src/app.js
 
-# Generate PDFs for all Kindle devices
-kindle-all: kindle7 kindle-paperwhite kindle-oasis kindle-scribe
-	@echo "🎉 所有Kindle设备PDF生成完成！"
-	@echo ""
-	@echo "生成的PDF文件："
-	@echo "  - pdfs/finalPdf-kindle7/"
-	@echo "  - pdfs/finalPdf-paperwhite/"
-	@echo "  - pdfs/finalPdf-oasis/"
-	@echo "  - pdfs/finalPdf-scribe/"
-
-# Documentation target helpers
-docs-openai:
-	@node $(DOC_TARGET_SCRIPT) use openai
-
-docs-claude:
-	@node $(DOC_TARGET_SCRIPT) use claude-code
-
-docs-claude-curated:
-	@node $(DOC_TARGET_SCRIPT) use claude-code-curated
-
-docs-openclaw:
-	@node $(DOC_TARGET_SCRIPT) use openclaw
-
-docs-cloudflare:
-	@node $(DOC_TARGET_SCRIPT) use cloudflare-blog
-
-docs-anthropic:
-	@node $(DOC_TARGET_SCRIPT) use anthropic-research
-
-docs-53ai:
-	@node $(DOC_TARGET_SCRIPT) use 53ai
-
-docs-claude-blog:
-	@node $(DOC_TARGET_SCRIPT) use claude-blog
-
-docs-current:
-	@node $(DOC_TARGET_SCRIPT) current
-	@echo ""
-	@echo "请将这些PDF传输到相应设备进行验证"
+# Shared checkpoints must not be rewritten by concurrent profile runs.
+kindle-all:
+	$(MAKE) kindle7
+	$(MAKE) kindle-paperwhite
+	$(MAKE) kindle-oasis
+	$(MAKE) kindle-scribe
 
 # Reset to base configuration
 reset-config:

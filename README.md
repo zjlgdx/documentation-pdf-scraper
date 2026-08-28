@@ -42,15 +42,60 @@ make install
 ```
 
 ### macOS host prerequisites
-- Node.js >= 18.18.0
+- Node.js >= 24 (Node 24 LTS recommended)
 - Python >= 3.10 (for PDF processing)
 - uv (Python package/environment manager)
-- Current Pandoc
+- Pandoc 3.10.2 (the version pinned in CI)
 - Poppler (`brew install poppler`) for PDF verification previews
 - A LaTeX engine that provides `xelatex`
 - DejaVu fonts (`brew install --cask font-dejavu`) and Noto Sans CJK SC
   for code and Chinese text. A small licensed symbol font is bundled under `assets/fonts`.
 - Cairo (`brew install cairo`) for SVG diagrams in generated PDFs
+
+## Reliability and repeatable runs
+
+Run `make doctor` before a large job. The CLI also checks Node, Python/PyMuPDF,
+Pandoc/XeLaTeX and Poppler before acquisition. CI and the devcontainer use Node 24.
+
+- `DOC_TARGET=claude-code-curated PDF_PROFILE=kindle-scribe make run` selects a
+  target and device for one run without editing `config.json`. `make kindle-all`
+  runs the profiles sequentially and reuses validated Markdown artifacts.
+- Resume checks the ordered URLs, acquisition configuration and SHA-256 of each
+  artifact. Changed selections invalidate the checkpoint. Missing or modified
+  files are reacquired. Batch assembly uses this checkpoint, never all files
+  found in the output directory. Final checkpoint write failures fail the run.
+- `make clean && make run` starts fresh acquisition. HTTP cache in `.cache/http`
+  survives this cleanup and uses ETag/Last-Modified revalidation; an HTTP failure
+  never silently returns stale bytes. `make clean-cache` clears the default HTTP
+  cache too. Custom `network.cacheDirectory` locations must be cleared explicitly.
+- User configuration rejects unknown fields. Use `concurrency` instead of the
+  removed `queue.maxConcurrent`; `queue.maxRetries`, `queue.retryDelay` and
+  `state.backupCount` were unused and now produce migration errors.
+- Native Markdown downloads are limited to 5 MiB and images to 20 MiB by default.
+  `network` controls timeouts, redirect count, rate limiting, 429 retries, byte
+  limits and image concurrency (default 3). `network.resourceDomains` optionally
+  restricts image hosts; `allowedDomains` restricts native source hosts.
+
+MDX cards retain their titles, destinations and bodies. Static literal expressions
+are retained, but unsupported dynamic expressions or empty custom components fail
+with a diagnostic. JavaScript from MDX is never evaluated. Markdown code examples
+keep their indentation and literal URLs/tables.
+
+Run `make pdf-smoke`, `node scripts/pdf-smoke.js A5`, and
+`PDF_PROFILE=kindle-scribe make pdf-smoke` for the layout matrix. Verification checks
+page size, margins, links, body content and TOC destinations; inspect the generated
+PNGs as well. Text bounds use glyph-height boxes with typography tolerance; images
+and physical page boundaries retain strict checks.
+
+### Security boundary
+
+Only use trusted documentation sources. HTTP acquisition rejects credentials in
+URLs, private/loopback/link-local destinations and disallowed redirect hosts.
+DNS checks do not pin the subsequent connection and are not a DNS-rebinding
+sandbox. Benchmark-range addresses used by local proxy fake-IP resolvers are
+supported. XeLaTeX runs with shell escape disabled in its render directory, but
+raw TeX and local file access are not fully sandboxed. This is not a service for
+rendering arbitrary untrusted uploads.
 
 ## Usage
 

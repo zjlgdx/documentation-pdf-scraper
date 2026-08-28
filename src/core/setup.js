@@ -18,6 +18,7 @@ import { MarkdownService } from '../services/markdownService.js';
 import { PandocPdfService } from '../services/pandocPdfService.js';
 import { Scraper } from './scraper.js';
 import { PythonMergeService } from '../services/PythonMergeService.js';
+import { HttpResourceService } from '../services/httpResourceService.js';
 
 const SCRAPER_DEPENDENCIES = [
   'config',
@@ -35,6 +36,7 @@ const SCRAPER_DEPENDENCIES = [
   'translationService',
   'markdownService',
   'markdownToPdfService',
+  'httpResourceService',
 ];
 
 function registerSingleton(container, name, factory, dependencies = []) {
@@ -69,12 +71,12 @@ function registerStateServices(container) {
   registerSingleton(
     container,
     'stateManager',
-    async (fileService, pathService, logger) => {
-      const stateManager = new StateManager(fileService, pathService, logger);
+    async (fileService, pathService, logger, config) => {
+      const stateManager = new StateManager(fileService, pathService, logger, config?.state);
       await stateManager.load();
       return stateManager;
     },
-    ['fileService', 'pathService', 'logger']
+    ['fileService', 'pathService', 'logger', 'config']
   );
   registerSingleton(
     container,
@@ -132,6 +134,7 @@ function createPdfStyleService(config) {
 }
 
 function registerContentServices(container) {
+  registerSingleton(container, 'httpResourceService', (config, logger) => new HttpResourceService({ config, logger }), ['config', 'logger']);
   registerSingleton(
     container,
     'imageService',
@@ -157,13 +160,14 @@ function registerContentServices(container) {
   registerSingleton(
     container,
     'markdownToPdfService',
-    (config, logger, metadataService, processRunner) => new PandocPdfService({
+    (config, logger, metadataService, processRunner, httpResourceService) => new PandocPdfService({
+      httpResourceService,
       processRunner,
       config,
       logger,
       metadataService,
     }),
-    ['config', 'logger', 'metadataService', 'processRunner']
+    ['config', 'logger', 'metadataService', 'processRunner', 'httpResourceService']
   );
 }
 

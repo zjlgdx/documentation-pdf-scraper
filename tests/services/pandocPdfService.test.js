@@ -69,6 +69,41 @@ describe('PandocPdfService', () => {
     expect(service.processRunner.run).not.toHaveBeenCalled();
   });
 
+  it('honors toc=false for batch rendering', async () => {
+    fs.writeFileSync(path.join(tempDir, '000-guide.md'), '# Guide\n\nBody.');
+    const render = vi.spyOn(service, '_renderContent').mockResolvedValue();
+    await service.generateBatchPdf(tempDir, 'unused.pdf', { toc: false });
+    expect(render.mock.calls[0][2].toc).toBe(false);
+  });
+
+  it('preserves nested lists, indented code and literal tables inside fences', () => {
+    const markdown = '- Parent\n  - Child\n\n    console.log("indented code")\n\n```markdown\n| A | B |\n| --- | --- |\n| x | y |\n```\n';
+    expect(service.normalizer._cleanMarkdownContent(markdown)).toBe(markdown);
+  });
+
+  it('does not strip leading code indentation while removing article metadata and titles', () => {
+    const content = service.normalizer._removeFrontmatter('---\ntitle: Guide\n---\n\n# Guide\n\n    code()');
+    expect(service.normalizer._prepareArticleContentForBatch(content, 'Guide')).toBe('    code()');
+  });
+
+  it('allows escaped prose filenames to wrap while preserving code spelling', () => {
+    const result = service.normalizer._cleanMarkdownContent('Use claude\\_desktop\\_config.json. Code: `a\\_b`.');
+    expect(result).toContain('claude\\_\\allowbreak{}desktop\\_\\allowbreak{}config.json');
+    expect(result).toContain('`a\\_b`');
+  });
+
+  it('retains MDX card titles, destinations and static expressions', () => {
+    service.normalizer.config.markdownSource = { format: 'mdx' };
+    const markdown = '<Card title="Quickstart" href="/docs/start">Read this guide.</Card>\n\n<Card title="Reference" href="/docs/reference" />\n\nThe default limit is {1000}.';
+    const result = service.normalizer._cleanMarkdownContent(markdown);
+    expect(result).toContain('[Quickstart](/docs/start)');
+    expect(result).toContain('Read this guide.');
+    expect(result).toContain('[Reference](/docs/reference)');
+    expect(result).toContain('The default limit is 1000.');
+    expect(service.normalizer._prepareArticleContentForBatch(markdown, 'Guide', 'https://example.com/other/page'))
+      .toContain('[Quickstart](https://example.com/docs/start)');
+  });
+
   it('rejects metadata read errors before rendering a flattened book', async () => {
     fs.writeFileSync(path.join(tempDir, '000-guide.md'), '# Guide');
     service.metadataService = { getSectionStructure: vi.fn().mockRejectedValue(new Error('bad metadata')) };
@@ -817,26 +852,13 @@ describe('PandocPdfService', () => {
       expect(result).toContain('suffix text');
     });
 
-    it('should strip JSX tag whose attribute value is a nested JSX element', () => {
+    it('rejects unsupported dynamic components rather than silently deleting content', () => {
       service.config.markdownSource = { format: 'mdx' };
-      // Regression: `<Experiment treatment={<InstallConfigurator />} />`
-      // A naive `<[A-Z]...[^>]*>` stops at the inner `/>` and leaves
-      // `} />` behind as prose. The brace-aware scanner must drop the
-      // whole outer tag.
-      const input = [
-        'before',
-        '',
-        '<Experiment flag="quickstart-install-configurator" treatment={<InstallConfigurator />} />',
-        '',
-        'after',
-      ].join('\n');
-      const result = service.normalizer._cleanMarkdownContent(input);
-      expect(result).not.toContain('Experiment');
-      expect(result).not.toContain('InstallConfigurator');
-      expect(result).not.toContain('} />');
-      expect(result).not.toContain('/>');
-      expect(result).toContain('before');
-      expect(result).toContain('after');
+      expect(() => service.normalizer._cleanMarkdownContent(
+        '<Experiment flag="quickstart-install-configurator" treatment={<InstallConfigurator />} />'
+      )).toThrow('Unsupported empty MDX component <Experiment>');
+      expect(() => service.normalizer._cleanMarkdownContent('Limit: {config.limit}'))
+        .toThrow('Unsupported dynamic MDX expression');
     });
 
     it('should strip JSX tag with multiple nested JSX attribute values', () => {

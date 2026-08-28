@@ -22,6 +22,14 @@ vi.mock('../../src/utils/logger.js', () => ({
 
 describe('ConfigValidator', () => {
   describe('validateConfig', () => {
+    test('preserves an explicit disabled failed-URL retry policy', () => {
+      const { config } = validateConfig({
+        rootURL: 'https://example.com', pdfDir: './pdfs',
+        navLinksSelector: 'nav a', contentSelector: 'main', retryFailedUrls: false,
+      });
+      expect(config.retryFailedUrls).toBe(false);
+    });
+
     test('应该验证有效的最小配置', () => {
       const config = {
         rootURL: 'https://example.com',
@@ -311,7 +319,6 @@ describe('ConfigValidator', () => {
         contentSelector: 'main',
         state: {
           saveInterval: 60000,
-          backupCount: 5,
           autoSave: false,
         },
       };
@@ -319,7 +326,6 @@ describe('ConfigValidator', () => {
       const result = validateConfig(config);
 
       expect(result.config.state.saveInterval).toBe(60000);
-      expect(result.config.state.backupCount).toBe(5);
       expect(result.config.state.autoSave).toBe(false);
     });
 

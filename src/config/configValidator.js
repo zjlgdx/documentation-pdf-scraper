@@ -100,6 +100,8 @@ const configSchema = Joi.object({
     .default(3)
     .description('Maximum number of retry attempts'),
 
+  retryFailedUrls: Joi.boolean().default(true).description('Retry failed URLs after the initial pass'),
+
   retryDelay: Joi.number()
     .integer()
     .min(0)
@@ -187,24 +189,9 @@ const configSchema = Joi.object({
 
   // 队列管理配置
   queue: Joi.object({
-    maxConcurrent: Joi.number()
-      .integer()
-      .min(1)
-      .max(20)
-      .default(5)
-      .description('Maximum concurrent operations'),
-
-    maxRetries: Joi.number()
-      .integer()
-      .min(0)
-      .default(3)
-      .description('Maximum retry attempts per operation'),
-
-    retryDelay: Joi.number()
-      .integer()
-      .min(100)
-      .default(1000)
-      .description('Base delay between retries (ms)'),
+    maxConcurrent: Joi.forbidden().messages({ 'any.unknown': 'queue.maxConcurrent was unused; use concurrency' }),
+    maxRetries: Joi.forbidden().messages({ 'any.unknown': 'queue.maxRetries was unused; use retryFailedUrls' }),
+    retryDelay: Joi.forbidden().messages({ 'any.unknown': 'queue.retryDelay was unused; use retryDelay' }),
 
     timeout: Joi.number()
       .integer()
@@ -420,11 +407,7 @@ const configSchema = Joi.object({
       .default(30000)
       .description('State save interval (ms)'),
 
-    backupCount: Joi.number()
-      .integer()
-      .min(1)
-      .default(3)
-      .description('Number of state file backups to keep'),
+    backupCount: Joi.forbidden().messages({ 'any.unknown': 'state.backupCount was never implemented; checkpoints are atomic' }),
 
     autoSave: Joi.boolean().default(true).description('Enable automatic state saving'),
 
@@ -435,6 +418,13 @@ const configSchema = Joi.object({
 
   // 网络配置
   network: Joi.object({
+    cacheDirectory: Joi.string().default('.cache/http').description('Persistent conditional HTTP cache; outside pdfDir'),
+    cacheEnabled: Joi.boolean().default(true),
+    maxSourceBytes: Joi.number().integer().min(1024).max(50 * 1024 * 1024).default(5 * 1024 * 1024),
+    maxImageBytes: Joi.number().integer().min(1024).max(100 * 1024 * 1024).default(20 * 1024 * 1024),
+    imageConcurrency: Joi.number().integer().min(1).max(5).default(3),
+    resourceDomains: Joi.array().items(Joi.string().hostname()).default([])
+      .description('Optional strict allowlist for image hosts, checked on every redirect'),
     userAgent: Joi.string().optional().description('Custom user agent string'),
 
     requestTimeout: Joi.number()

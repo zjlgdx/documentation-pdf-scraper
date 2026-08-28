@@ -48,3 +48,16 @@ def example():
 ## Verify chapter navigation and linked table of contents
 
 Every printed table-of-contents number must agree with the destination page label. The first content page starts at 1, after the Roman-numbered contents pages.
+
+- Parent item
+  - Nested child keeps its parent
+
+Indented code remains code:
+
+    indented_literal = "preserved"
+
+```markdown
+| A | B |
+| --- | --- |
+| x | y |
+```

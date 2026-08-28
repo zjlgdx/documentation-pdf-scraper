@@ -183,7 +183,7 @@ describe('setup', () => {
         expect.any(Function),
         expect.objectContaining({
           singleton: true,
-          dependencies: ['fileService', 'pathService', 'logger'],
+          dependencies: ['fileService', 'pathService', 'logger', 'config'],
           lifecycle: 'singleton',
         })
       );
@@ -273,7 +273,7 @@ describe('setup', () => {
         expect.any(Function),
         expect.objectContaining({
           singleton: true,
-          dependencies: ['config', 'logger', 'metadataService', 'processRunner'],
+          dependencies: ['config', 'logger', 'metadataService', 'processRunner', 'httpResourceService'],
           lifecycle: 'singleton',
         })
       );
@@ -299,6 +299,7 @@ describe('setup', () => {
             'translationService',
             'markdownService',
             'markdownToPdfService',
+            'httpResourceService',
           ],
           lifecycle: 'singleton',
         })
@@ -509,6 +510,7 @@ describe('setup', () => {
         'translationService',
         'markdownService',
         'markdownToPdfService',
+        'httpResourceService',
       ];
 
       await scraperFactory(...services);
@@ -528,6 +530,7 @@ describe('setup', () => {
         translationService: 'translationService',
         markdownService: 'markdownService',
         markdownToPdfService: 'markdownToPdfService',
+        httpResourceService: 'httpResourceService',
       });
     });
   });
@@ -626,7 +629,7 @@ describe('setup', () => {
       const { StateManager } = await import('../../src/services/stateManager.js');
       const stateManager = await stateManagerFactory('file', 'path', 'logger');
 
-      expect(StateManager).toHaveBeenCalledWith('file', 'path', 'logger');
+      expect(StateManager).toHaveBeenCalledWith('file', 'path', 'logger', undefined);
       expect(stateManager.load).toHaveBeenCalled();
 
       // Test browserPool async factory

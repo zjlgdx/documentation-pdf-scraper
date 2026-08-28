@@ -23,6 +23,7 @@ vi.mock('../../src/utils/logger.js', () => ({
 import { Application } from '../../src/app.js';
 
 function createMockContainer(serviceMap) {
+  serviceMap.stateManager = { getArtifacts: vi.fn().mockResolvedValue([{ index: "0", url: "https://docs.example.com/start", path: "000-guide.md", sha256: "fixture" }]) };
   serviceMap.metadataService = { getArticleTitles: async () => ({ '0': 'Guide' }), getSectionStructure: async () => null };
   serviceMap.processRunner = { dispose: vi.fn(), getRunningProcesses: vi.fn(() => []) };
   return {

@@ -8,7 +8,7 @@ describe('Windows host container workspace', () => {
     const dockerfile = await fs.readFile(dockerfilePath, 'utf8');
 
     expect(dockerfile).toContain(
-      'FROM mcr.microsoft.com/devcontainers/javascript-node:1-20-bookworm'
+      'FROM mcr.microsoft.com/devcontainers/javascript-node:1-24-bookworm'
     );
     expect(dockerfile).not.toContain('@anthropic-ai/claude-code');
     expect(dockerfile).not.toContain('.claude');

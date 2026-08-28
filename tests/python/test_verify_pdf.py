@@ -2,6 +2,8 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+import sys
 
 import pymupdf
 
@@ -82,6 +84,45 @@ class VerifyPdfTests(unittest.TestCase):
         self.path.write_text("not a PDF")
         with self.assertRaises(pymupdf.FileDataError):
             verify.inspect_pdf(self.path)
+
+    def test_profile_dimensions_and_vertical_margins_are_checked(self):
+        self.create_pdf()
+        result = verify.inspect_pdf(self.path, {"pageWidthPt": 200, "pageHeightPt": 400, "marginTopPt": 100})
+        kinds = {issue["kind"] for issue in result["issues"]}
+        self.assertIn("page_size", kinds)
+        self.assertIn("overflow", kinds)
+
+    def test_toc_title_does_not_prove_body_or_semantic_coverage(self):
+        self.create_pdf(empty=True)
+        result = verify.inspect_pdf(self.path, {"candidateTitles": ["Guide"], "bodySnippets": ["Guide"]})
+        self.assertEqual(result["foundTitles"], [])
+        self.assertIn("missing_body_content", {issue["kind"] for issue in result["issues"]})
+
+    def test_heading_only_article_is_not_complete(self):
+        self.create_pdf()
+        with pymupdf.open(self.path) as doc:
+            doc.set_toc([[1, "Collection", 2], [2, "Guide", 2]])
+            doc.saveIncr()
+        result = verify.inspect_pdf(self.path, {"articleTitles": ["Guide"]})
+        self.assertIn("empty_article_body", {issue["kind"] for issue in result["issues"]})
+
+    def test_text_matching_handles_discretionary_and_authored_hyphens(self):
+        self.assertTrue(verify.contains_text("documentation", "docu-\nmentation"))
+        self.assertTrue(verify.contains_text("set-up", "set-\nup"))
+        self.assertFalse(verify.contains_text("documentation", "different content"))
+
+    def test_render_removes_stale_numbered_previews_but_preserves_other_files(self):
+        self.create_pdf()
+        report_dir = Path(self.temp.name) / "qa"
+        report_dir.mkdir()
+        (report_dir / "page-999.png").write_text("stale")
+        (report_dir / "page-notes.png").write_text("keep")
+        argv = ["verify_pdf", str(self.path), "--report-dir", str(report_dir), "--render"]
+        with patch.object(sys, "argv", argv), patch.object(verify.subprocess, "run") as render:
+            self.assertEqual(verify.main(), 0)
+        self.assertFalse((report_dir / "page-999.png").exists())
+        self.assertTrue((report_dir / "page-notes.png").exists())
+        self.assertEqual(render.call_count, 2)
 
 
 if __name__ == "__main__":

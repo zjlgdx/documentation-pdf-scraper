@@ -7,6 +7,7 @@ import { EventEmitter } from 'events';
 import { normalizeUrl, getUrlHash } from '../utils/url.js';
 import { NetworkError, ValidationError } from '../utils/errors.js';
 import { retry, delay } from '../utils/common.js';
+import { HttpResourceService } from '../services/httpResourceService.js';
 
 export class Scraper extends EventEmitter {
   constructor(dependencies) {
@@ -28,6 +29,7 @@ export class Scraper extends EventEmitter {
     this.translationService = dependencies.translationService;
     this.markdownService = dependencies.markdownService;
     this.markdownToPdfService = dependencies.markdownToPdfService;
+    this.httpResourceService = dependencies.httpResourceService || new HttpResourceService({ config: this.config, logger: this.logger });
 
     // 内部状态
     this.urlQueue = [];
@@ -851,21 +853,8 @@ export class Scraper extends EventEmitter {
     if (!sourceUrl.pathname.endsWith(suffix)) sourceUrl.pathname += suffix;
     sourceUrl.hash = '';
     const mdUrl = sourceUrl.href;
-    const response = await fetch(mdUrl, {
-      headers: {
-        'User-Agent': this.config.browser?.userAgent || 'Mozilla/5.0',
-        Accept: 'text/markdown, text/plain',
-      },
-      signal: AbortSignal.timeout(this.config.pageTimeout || 30000),
-    });
-    if (!response.ok) {
-      throw new NetworkError(`Markdown source HTTP ${response.status}: ${mdUrl}`, mdUrl);
-    }
-    const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (!['text/markdown', 'text/plain', 'text/x-markdown'].includes(contentType)) {
-      throw new ValidationError(`Expected Markdown response, received ${contentType}: ${mdUrl}`);
-    }
-    const content = await response.text();
+    const { buffer } = await this.httpResourceService.get(mdUrl, 'markdown');
+    const content = buffer.toString('utf8');
     const title = content.match(/^#\s+(.+)$/m)?.[1].trim();
     if (!content.trim() || !title) {
       throw new ValidationError(`Markdown source must contain an H1 title: ${mdUrl}`);
@@ -1038,7 +1027,7 @@ export class Scraper extends EventEmitter {
     await this.markdownToPdfService.convertContentToPdf(
       translatedMarkdown,
       pdfPath,
-      this.config.markdownPdf
+      { ...this.config.markdownPdf, sourceUrl: url }
     );
     this.logger.info('Markdown 工作流 PDF 已生成', { pdfPath });
     return { actualOutputPath: pdfPath, isBatchMode: false };
@@ -1105,7 +1094,7 @@ export class Scraper extends EventEmitter {
     const { title } = titleInfo;
     this.stateManager.setUrlIndex(url, index);
     await this._persistArticleTitle(url, index, titleInfo);
-    this.stateManager.markProcessed(url, output.actualOutputPath);
+    await this.stateManager.recordArtifact(url, output.actualOutputPath);
     this.progressTracker.success(url);
 
     const processedCount = this.progressTracker.getStats().processed;
@@ -1177,7 +1166,7 @@ export class Scraper extends EventEmitter {
     const { isRetry = false } = options;
 
     // 检查是否已处理
-    if (this.stateManager.isProcessed(url)) {
+    if (await this.stateManager.canResume(url)) {
       this.logger.debug(`跳过已处理的URL: ${url}`);
       this.progressTracker.skip(url);
       return { status: 'skipped', reason: 'already_processed' };
@@ -1311,9 +1300,12 @@ export class Scraper extends EventEmitter {
       // 收集URL
       const urls = await this.collectUrls();
       if (urls.length === 0) {
-        this.logger.warn('没有找到可爬取的URL');
-        return;
+        throw new ValidationError('没有找到可爬取的URL');
       }
+
+      const resumed = await this.stateManager.prepareRun(urls, this.config);
+      if (!resumed) await this.metadataService.resetArticleTitles();
+      if (this.config.state?.autoSave !== false) this.stateManager.startAutoSave();
 
       // 初始化运行时状态基线，避免统计依赖延迟更新导致计数不一致
       this.stateManager.setStartTime();
@@ -1348,12 +1340,12 @@ export class Scraper extends EventEmitter {
       await this.queueManager.waitForIdle();
 
       // 保存最终状态
-      await this.stateManager.save();
+      await this.stateManager.save(true);
 
       // 重试失败的URL
       if (this.config.retryFailedUrls !== false) {
         await this.retryFailedUrls();
-        await this.stateManager.save();
+        await this.stateManager.save(true);
       }
 
       // 完成
@@ -1368,6 +1360,7 @@ export class Scraper extends EventEmitter {
         成功数: succeededCount,
         失败数: stats.failed,
         跳过数: stats.skipped,
+        HTTP: { ...this.httpResourceService.metrics },
         耗时: `${Math.round(duration / 1000)}秒`,
         成功率: `${((succeededCount / urls.length) * 100).toFixed(1)}%`,
       });
@@ -1450,6 +1443,7 @@ export class Scraper extends EventEmitter {
    */
   async cleanup() {
     this.logger.info('开始清理资源...');
+    this.stateManager?.stopAutoSave();
 
     try {
       // 1. 暂停并清理队列管理器
@@ -1473,7 +1467,7 @@ export class Scraper extends EventEmitter {
 
       // 5. 保存最终状态
       if (this.stateManager) {
-        await this.stateManager.save();
+        await this.stateManager.save(true);
       }
 
       this.logger.info('资源清理完成');

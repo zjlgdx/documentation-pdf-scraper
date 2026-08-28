@@ -5,6 +5,8 @@ import { pandocHeader } from './pdf/pandocTemplate.js';
 import { createHash } from 'crypto';
 import path from 'path';
 import fs from 'fs';
+import pLimit from 'p-limit';
+import { HttpResourceService } from './httpResourceService.js';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const IMAGE_CONTENT_TYPE_FORMATS = [
@@ -75,6 +77,7 @@ export class PandocPdfService {
     this.pandocBinary = options.pandocBinary || 'pandoc';
     this.latexBinary = options.latexBinary || 'xelatex';
     this.metadataService = options.metadataService || null;
+    this.httpResourceService = options.httpResourceService || new HttpResourceService({ config: this.config, logger: this.logger });
   }
 
   /**
@@ -116,7 +119,7 @@ export class PandocPdfService {
    * @param {Object} options
    */
   async convertContentToPdf(markdownContent, outputPath, options = {}) {
-    return this._renderContent(this.normalizer._cleanMarkdownContent(markdownContent), outputPath, options);
+    return this._renderContent(this.normalizer._cleanMarkdownContent(markdownContent, options.sourceUrl), outputPath, options);
   }
 
   async _renderContent(content, outputPath, options) {
@@ -207,12 +210,14 @@ export class PandocPdfService {
       this.latexBinary,
       [
         '-halt-on-error',
+        '-no-shell-escape',
         '-interaction=nonstopmode',
         `-output-directory=${outputDir}`,
         inputPath,
       ],
       {
         failureLabel: 'XeLaTeX 转换失败',
+        cwd: outputDir,
       }
     );
   }
@@ -259,9 +264,12 @@ export class PandocPdfService {
     const cleanupPaths = [mediaDir];
 
     try {
-      for (const url of urls) {
+      const limit = pLimit(this.config.network?.imageConcurrency ?? 3);
+      const results = await Promise.allSettled(urls.map((url) => limit(async () => {
         resolvedUrls.set(url, await this._materializePdfSafeImage(url, mediaDir));
-      }
+      })));
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
     } catch (error) {
       fs.rmSync(mediaDir, { recursive: true, force: true });
       throw error;
@@ -296,19 +304,7 @@ export class PandocPdfService {
       return outputPath;
     }
 
-    const response = await fetch(url, {
-      headers: {
-        'user-agent': 'documentation-pdf-scraper/1.0',
-      },
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (!response.ok) {
-      throw new Error(`下载失败: HTTP ${response.status}`);
-    }
-
-    const contentType = response.headers.get('content-type') || '';
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const { contentType, buffer } = await this.httpResourceService.get(url, 'image');
     const detectedFormat = this._detectDownloadedImageFormat(buffer, contentType);
     const sourceExtension = this._getImageExtensionFromUrl(url, contentType, detectedFormat);
     const sourcePath = path.join(mediaDir, `${digest}${sourceExtension}`);
@@ -606,7 +602,18 @@ export class PandocPdfService {
       });
 
       // 1. Get all markdown files sorted by index
-      const files = this._getMarkdownFiles(markdownDir);
+      const artifacts = options.artifacts;
+      if (artifacts && (new Set(artifacts.map((a) => a.index)).size !== artifacts.length
+        || new Set(artifacts.map((a) => a.url)).size !== artifacts.length)) {
+        throw new Error('Duplicate artifact index or URL');
+      }
+      const files = artifacts ? artifacts.map((artifact) => {
+        const relative = path.relative(path.resolve(markdownDir), path.resolve(artifact.path));
+        if (relative.startsWith('..') || path.isAbsolute(relative) || !relative.endsWith('.md')) {
+          throw new Error(`Unsafe Markdown artifact path: ${artifact.path}`);
+        }
+        return relative;
+      }) : this._getMarkdownFiles(markdownDir);
       if (files.length === 0) {
         throw new Error(`No markdown files found in ${markdownDir}`);
       }
@@ -627,7 +634,8 @@ export class PandocPdfService {
         markdownDir,
         files,
         sectionStructure,
-        articleTitles
+        articleTitles,
+        artifacts
       );
 
       this.logger?.info?.('Markdown files concatenated', {
@@ -636,8 +644,10 @@ export class PandocPdfService {
       });
 
       await this._renderContent(combinedContent, outputPath, {
-        ...options, toc: true, tocDepth: options.tocDepth || 3,
+        ...options, toc: options.toc ?? this.config.markdownPdf?.toc ?? true,
+        tocDepth: options.tocDepth ?? this.config.markdownPdf?.tocDepth ?? 3,
       });
+      this.logger?.info?.('HTTP resource metrics', { ...this.httpResourceService.metrics });
       return { success: true, filesProcessed: files.length, outputPath };
 
     } catch (error) {
@@ -697,13 +707,17 @@ export class PandocPdfService {
    * @returns {string} - Combined markdown content
    * @private
    */
-  _concatenateMarkdownFiles(dir, files, sectionStructure, articleTitles) {
+  _concatenateMarkdownFiles(dir, files, sectionStructure, articleTitles, artifacts) {
     const sections = sectionStructure?.sections || [];
     // urlToSection is available for future use if needed
 
     // Build index to file mapping
     const indexToFile = new Map();
-    for (const file of files) {
+    for (const [position, file] of files.entries()) {
+      if (artifacts) {
+        indexToFile.set(artifacts[position].index, file);
+        continue;
+      }
       const prefix = file.split('-')[0];
       if (/^\d+$/.test(prefix)) {
         indexToFile.set(String(parseInt(prefix, 10)), file);
@@ -712,8 +726,10 @@ export class PandocPdfService {
 
     // If we have section structure, organize by sections
     if (sections.length > 0) {
-      return this._concatenateWithSections(dir, files, sections, articleTitles, indexToFile);
+      return this._concatenateWithSections(dir, files, sections, articleTitles, indexToFile, artifacts);
     }
+
+    if (artifacts) throw new Error('Missing section metadata for current-run artifacts');
 
     // Standalone Markdown directories may intentionally omit section metadata.
     return this._concatenateFlat(dir, files, articleTitles);
@@ -723,7 +739,7 @@ export class PandocPdfService {
    * Concatenate with section headers for hierarchical TOC
    * @private
    */
-  _concatenateWithSections(dir, files, sections, articleTitles, indexToFile) {
+  _concatenateWithSections(dir, files, sections, articleTitles, indexToFile, artifacts) {
     const parts = [];
     const processedIndices = new Set();
 
@@ -750,7 +766,15 @@ export class PandocPdfService {
 
         const filePath = path.join(dir, file);
 
-        let content = fs.readFileSync(filePath, 'utf8');
+        const bytes = fs.readFileSync(filePath);
+        const artifact = artifacts?.find((item) => item.index === pageIndex);
+        if (artifact) {
+          if (artifact.url !== pageInfo.url) throw new Error(`Artifact URL mismatch: ${pageIndex}`);
+          if (createHash('sha256').update(bytes).digest('hex') !== artifact.sha256) {
+            throw new Error(`Artifact checksum mismatch: ${artifact.url}`);
+          }
+        }
+        let content = bytes.toString('utf8');
 
         // Remove frontmatter if present
         content = this.normalizer._removeFrontmatter(content);
@@ -760,7 +784,7 @@ export class PandocPdfService {
         if (!title) throw new Error(`Missing article title: ${pageIndex}`);
 
         // Strip leading title from content if it duplicates the injected title
-        const cleanedContent = this.normalizer._prepareArticleContentForBatch(content, title);
+        const cleanedContent = this.normalizer._prepareArticleContentForBatch(content, title, pageInfo.url);
 
         const pageBreak = addedPageCount > 0 ? '\\newpage\n\n' : '';
         parts.push(`${pageBreak}## ${title}\n\n${cleanedContent}\n`);

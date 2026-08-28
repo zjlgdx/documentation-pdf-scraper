@@ -15,6 +15,14 @@ describe('MarkdownService', () => {
     vi.clearAllMocks();
   });
 
+  test('URL normalization never rewrites fenced, indented or inline examples', () => {
+    const service = new MarkdownService({ logger });
+    const examples = '```md\n[Guide](/guide)\n```\n\n    ![Image](/image.png)\n\n`[Link](/link)`';
+    const result = service.normalizeResourceUrls(`${examples}\n\n[Actual](/actual)`, 'https://example.com/docs');
+    expect(result).toContain(examples);
+    expect(result).toContain('[Actual](https://example.com/actual)');
+  });
+
   test('convertHtmlToMarkdown 应该将简单 HTML 转为 Markdown', () => {
     const service = new MarkdownService({ logger });
     const html = '<h1>Title</h1><p>Content</p>';

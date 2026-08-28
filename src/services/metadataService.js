@@ -31,6 +31,10 @@ export class MetadataService {
     return await this.fileService.readJson(filePath, {});
   }
 
+  async resetArticleTitles() {
+    await this.fileService.writeJson(this.pathService.getMetadataPath('articleTitles'), {});
+  }
+
   /**
    * 保存section结构信息（用于生成分层TOC）
    */

@@ -18,6 +18,9 @@ export const pandocHeader = String.raw`\usepackage{fvextra}
 \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,fontsize=\small,commandchars=\\\{\}}
 \usepackage{xurl}
 \usepackage{microtype}
+\microtypesetup{protrusion=false}
+% KOMA's large default footskip can place page labels outside a 1cm margin.
+\setlength{\footskip}{12pt}
 \setlength{\emergencystretch}{3em}
 \usepackage{tocloft}
 \setlength{\cftbeforesecskip}{0.55em}
@@ -53,12 +56,17 @@ export const pandocHeader = String.raw`\usepackage{fvextra}
   \let\scraperSubsectionTocLine\l@subsection
   \renewcommand{\l@subsection}{\Needspace{3\baselineskip}\scraperSubsectionTocLine}%
 }
+\@ifclassloaded{scrartcl}{%
+  \RedeclareSectionCommand[runin=false,beforeskip=1.5ex plus 0.5ex minus 0.2ex,afterskip=0.6ex]{paragraph}
+  \RedeclareSectionCommand[runin=false,beforeskip=1.2ex plus 0.4ex minus 0.2ex,afterskip=0.5ex]{subparagraph}
+}{%
+  \usepackage{titlesec}
+  \titleformat{\paragraph}[block]{\normalsize\bfseries}{}{0pt}{}
+  \titlespacing*{\paragraph}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{0.6ex}
+  \titleformat{\subparagraph}[block]{\normalsize\bfseries}{}{0pt}{}
+  \titlespacing*{\subparagraph}{0pt}{1.2ex plus 0.4ex minus 0.2ex}{0.5ex}
+}
 \makeatother
-\usepackage{titlesec}
-\titleformat{\paragraph}[block]{\normalsize\bfseries}{}{0pt}{}
-\titlespacing*{\paragraph}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{0.6ex}
-\titleformat{\subparagraph}[block]{\normalsize\bfseries}{}{0pt}{}
-\titlespacing*{\subparagraph}{0pt}{1.2ex plus 0.4ex minus 0.2ex}{0.5ex}
 \let\scraperTexttt\texttt
 \renewcommand{\texttt}[1]{{\small\scraperTexttt{#1}}}
 `;

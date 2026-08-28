@@ -1,6 +1,8 @@
 // src/services/fileService.js
 import fs from 'fs/promises';
 import path from 'path';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { FileOperationError } from '../utils/errors.js';
 
 export class FileService {
@@ -80,7 +82,7 @@ export class FileService {
     try {
       const content = JSON.stringify(data, null, 2);
       await this.ensureDirectory(path.dirname(filePath));
-      tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+      tmpPath = `${filePath}.tmp-${randomUUID()}`;
       await fs.writeFile(tmpPath, content, 'utf8');
       await fs.rename(tmpPath, filePath);
       this.logger.debug(`写入JSON文件: ${filePath}`);
@@ -154,17 +156,26 @@ export class FileService {
    * 写入纯文本文件
    */
   async writeText(filePath, content) {
+    const temporary = `${filePath}.tmp-${randomUUID()}`;
     try {
       await this.ensureDirectory(path.dirname(filePath));
-      await fs.writeFile(filePath, content, 'utf8');
+      await fs.writeFile(temporary, content, 'utf8');
+      await fs.rename(temporary, filePath);
       this.logger.debug(`写入文本文件: ${filePath}`);
     } catch (error) {
+      await fs.rm(temporary, { force: true }).catch(() => {});
       throw new FileOperationError(
         `写入文本文件失败: ${filePath} - ${error.message}`,
         filePath,
         'writeText'
       );
     }
+  }
+
+  async hashFile(filePath) {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+    return hash.digest('hex');
   }
 
   /**

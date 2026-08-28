@@ -56,6 +56,7 @@ describe('Scraper', () => {
       },
       metadataService: {
         saveArticleTitle: vi.fn(),
+        resetArticleTitles: vi.fn(),
         logImageLoadFailure: vi.fn(),
         logFailedLink: vi.fn(),
         saveSectionStructure: vi.fn(),
@@ -63,9 +64,13 @@ describe('Scraper', () => {
       stateManager: {
         on: vi.fn(),
         load: vi.fn(),
+        startAutoSave: vi.fn(),
+        stopAutoSave: vi.fn(),
         save: vi.fn(),
         isProcessed: vi.fn().mockReturnValue(false),
-        markProcessed: vi.fn(),
+        recordArtifact: vi.fn(),
+        canResume: vi.fn().mockResolvedValue(false),
+        prepareRun: vi.fn().mockResolvedValue(true),
         markFailed: vi.fn(),
         clearFailure: vi.fn(),
         setStartTime: vi.fn(),
@@ -126,6 +131,8 @@ describe('Scraper', () => {
     };
 
     scraper = new Scraper(mockDependencies);
+    scraper.httpResourceService.resolveHost = async () => [{ address: "93.184.216.34" }];
+    scraper.httpResourceService.network.cacheEnabled = false;
   });
 
   afterEach(() => {
@@ -186,7 +193,7 @@ describe('Scraper', () => {
 
       await expect(scraper.scrapePage('https://example.com/guide', 1)).rejects.toThrow();
       expect(mockDependencies.pageManager.createPage).not.toHaveBeenCalled();
-      expect(mockDependencies.stateManager.markProcessed).not.toHaveBeenCalled();
+      expect(mockDependencies.stateManager.recordArtifact).not.toHaveBeenCalled();
       expect(mockDependencies.stateManager.markFailed).toHaveBeenCalled();
     });
 
@@ -203,7 +210,7 @@ describe('Scraper', () => {
       scraper.markdownToPdfService.convertContentToPdf.mockRejectedValue(new Error('Pandoc failed'));
       await expect(scraper.scrapePage('https://example.com/guide', 1)).rejects.toThrow();
       expect(mockPage.pdf).not.toHaveBeenCalled();
-      expect(mockDependencies.stateManager.markProcessed).not.toHaveBeenCalled();
+      expect(mockDependencies.stateManager.recordArtifact).not.toHaveBeenCalled();
     });
 
     it('uses DOM extraction only when native Markdown is disabled', async () => {
@@ -499,7 +506,7 @@ describe('Scraper', () => {
           printBackground: true,
         })
       );
-      expect(mockDependencies.stateManager.markProcessed).toHaveBeenCalledWith(
+      expect(mockDependencies.stateManager.recordArtifact).toHaveBeenCalledWith(
         testUrl,
         './pdfs/001-page.pdf'
       );
@@ -510,7 +517,7 @@ describe('Scraper', () => {
     });
 
     it('should skip already processed pages', async () => {
-      mockDependencies.stateManager.isProcessed.mockReturnValue(true);
+      mockDependencies.stateManager.canResume.mockResolvedValue(true);
 
       const result = await scraper.scrapePage(testUrl, testIndex);
 
@@ -560,7 +567,7 @@ describe('Scraper', () => {
 
       await expect(scraper.scrapePage('https://example.com/page1', 0)).rejects.toThrow(NetworkError);
 
-      expect(mockDependencies.stateManager.markProcessed).not.toHaveBeenCalled();
+      expect(mockDependencies.stateManager.recordArtifact).not.toHaveBeenCalled();
       expect(mockDependencies.progressTracker.success).not.toHaveBeenCalled();
       expect(mockDependencies.progressTracker.failure).toHaveBeenCalled();
     });
@@ -729,6 +736,22 @@ describe('Scraper', () => {
       expect(scraper.cleanup).toHaveBeenCalled();
     });
 
+    it('fails the run when its final checkpoint cannot be saved', async () => {
+      mockDependencies.stateManager.save.mockRejectedValue(new Error('disk full'));
+      await expect(scraper.run()).rejects.toThrow('disk full');
+      expect(mockDependencies.stateManager.save).toHaveBeenCalledWith(true);
+      expect(mockDependencies.progressTracker.finish).not.toHaveBeenCalled();
+      expect(scraper.cleanup).toHaveBeenCalled();
+    });
+
+    it('honors retryFailedUrls=false at the orchestration boundary', async () => {
+      scraper.config.retryFailedUrls = false;
+      const retry = vi.spyOn(scraper, 'retryFailedUrls');
+      await scraper.run();
+      expect(retry).not.toHaveBeenCalled();
+      expect(mockDependencies.stateManager.save).toHaveBeenCalledWith(true);
+    });
+
     it('should use succeeded count for completion success metrics', async () => {
       scraper.collectUrls.mockResolvedValue([
         'https://example.com/page1',
@@ -765,9 +788,7 @@ describe('Scraper', () => {
     it('should handle no URLs found', async () => {
       scraper.collectUrls.mockResolvedValue([]);
 
-      await scraper.run();
-
-      expect(mockDependencies.logger.warn).toHaveBeenCalledWith('没有找到可爬取的URL');
+      await expect(scraper.run()).rejects.toThrow('没有找到可爬取的URL');
       expect(mockDependencies.queueManager.addTask).not.toHaveBeenCalled();
     });
 

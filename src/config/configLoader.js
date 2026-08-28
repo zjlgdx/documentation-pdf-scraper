@@ -42,14 +42,21 @@ class ConfigLoader {
       this.logger.debug('Raw configuration loaded:', parsedConfig);
 
       // 合并 doc-target 配置（如果配置了 docTarget 或环境变量 DOC_TARGET）
-      const mergedConfig = await this.applyDocTargetConfig(parsedConfig);
+      let mergedConfig = await this.applyDocTargetConfig(parsedConfig);
+      const profile = process.env.PDF_PROFILE?.trim();
+      if (profile) {
+        if (!/^[a-z0-9-]+$/.test(profile)) throw new Error('Invalid PDF_PROFILE name');
+        const profilePath = path.join(path.dirname(this.configPath), 'config-profiles', `${profile}.json`);
+        mergedConfig = this.deepMerge(mergedConfig, await this.readJsonFile(profilePath));
+      }
 
       // 处理配置
-      const processedConfig = await this.processConfig(mergedConfig);
+      const { _runtime, ...processedConfig } = await this.processConfig(mergedConfig);
 
       // 验证配置
-      const validationResult = validateConfig(processedConfig);
+      const validationResult = validateConfig(processedConfig, { stripUnknown: false });
       this.config = validationResult.config;
+      Object.defineProperty(this.config, '_runtime', { value: _runtime, configurable: true });
       this.loaded = true;
 
       this.logger.info('Configuration loaded and validated successfully');

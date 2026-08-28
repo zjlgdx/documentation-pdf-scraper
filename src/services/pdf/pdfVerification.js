@@ -21,6 +21,16 @@ export async function verifyPdf(pdfPath, { config, processRunner, expectations =
   if (config.markdownPdf?.enabled) {
     checks.marginLeftPt = points(typeof margin === 'object' ? margin.left || '1in' : margin || '1in');
     checks.marginRightPt = points(typeof margin === 'object' ? margin.right || '1in' : margin || '1in');
+    checks.marginTopPt = points(typeof margin === 'object' ? margin.top || '1in' : margin || '1in');
+    checks.marginBottomPt = points(typeof margin === 'object' ? margin.bottom || '1in' : margin || '1in');
+    const format = config.pdf?.kindleOptimized ? config.pdf.pageFormat || config.pdf.format
+      : config.markdownPdf.pdfOptions?.format;
+    const sizes = { A3: [297, 420], A4: [210, 297], A5: [148, 210], Letter: [215.9, 279.4],
+      Legal: [215.9, 355.6], Tabloid: [279.4, 431.8] };
+    if (format) {
+      if (!sizes[format]) throw new ValidationError(`Unsupported PDF verification format: ${format}`);
+      [checks.pageWidthPt, checks.pageHeightPt] = sizes[format].map((mm) => points(`${mm}mm`));
+    }
   }
   const destination = path.resolve(reportDir || path.join(path.dirname(pdfPath), 'qa', path.basename(pdfPath, '.pdf')));
   await fs.mkdir(destination, { recursive: true });

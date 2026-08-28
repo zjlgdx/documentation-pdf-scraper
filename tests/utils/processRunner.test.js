@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ProcessRunner } from '../../src/utils/processRunner.js';
+import { checkToolchain } from '../../src/utils/toolchain.js';
 
 describe('ProcessRunner', () => {
   const runners = [];
@@ -72,5 +73,16 @@ describe('ProcessRunner', () => {
     const runner = createRunner();
     await runner.dispose();
     expect(runner.getRunningProcesses()).toEqual([]);
+  });
+
+  it('preflights the selected tools and rejects unsupported Node before any process starts', async () => {
+    const runner = { run: vi.fn().mockResolvedValue({ stdout: 'tool version\n', stderr: '' }) };
+    const config = { python: { executable: '/selected/python' }, markdownPdf: { enabled: true } };
+    await expect(checkToolchain(config, runner, '22.0.0')).rejects.toThrow('Node.js >= 24');
+    expect(runner.run).not.toHaveBeenCalled();
+    const result = await checkToolchain(config, runner, '24.18.0');
+    expect(result.tools.map((tool) => tool.command)).toEqual(['/selected/python', 'pdftoppm', 'pandoc', 'xelatex']);
+    runner.run.mockRejectedValue(new Error('missing renderer'));
+    await expect(checkToolchain(config, runner, '24.18.0')).rejects.toThrow('missing renderer');
   });
 });

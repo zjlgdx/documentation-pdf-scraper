@@ -94,6 +94,28 @@ describe('ConfigLoader', () => {
       expect(configLoader.loaded).toBe(true);
     });
 
+    test('rejects unknown user fields instead of silently stripping them', async () => {
+      const { validateConfig: realValidate } = await vi.importActual('../../src/config/configValidator.js');
+      validateConfig.mockImplementation(realValidate);
+      fs.promises.readFile.mockResolvedValue(JSON.stringify({ ...mockConfigData, retryFailedUrl: false }));
+      await expect(configLoader.load()).rejects.toThrow('retryFailedUrl');
+    });
+
+    test('merges a per-run PDF profile without modifying the base config', async () => {
+      vi.stubEnv('PDF_PROFILE', 'kindle-scribe');
+      try {
+        fs.promises.readFile.mockResolvedValueOnce(JSON.stringify(mockConfigData))
+          .mockResolvedValueOnce(JSON.stringify({ pdf: { kindleOptimized: true, fontSize: '18px' } }));
+        const { validateConfig: realValidate } = await vi.importActual('../../src/config/configValidator.js');
+        validateConfig.mockImplementation(realValidate);
+        const config = await configLoader.load();
+        expect(config.pdf.fontSize).toBe('18px');
+        expect(config.pdf.kindleOptimized).toBe(true);
+        expect(config._runtime.nodeVersion).toBe(process.version);
+        expect(fs.promises.readFile).toHaveBeenCalledWith(expect.stringContaining('config-profiles/kindle-scribe.json'), 'utf8');
+      } finally { vi.unstubAllEnvs(); }
+    });
+
     test('应该处理配置文件不存在', async () => {
       const error = new Error('ENOENT');
       error.code = 'ENOENT';

@@ -1,8 +1,18 @@
 // src/services/stateManager.js
 import { EventEmitter } from 'events';
+import { createHash } from 'node:crypto';
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().filter((key) => value[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
 
 export class StateManager extends EventEmitter {
-  constructor(fileService, pathService, logger) {
+  constructor(fileService, pathService, logger, options = {}) {
     super();
     this.fileService = fileService;
     this.pathService = pathService;
@@ -21,8 +31,12 @@ export class StateManager extends EventEmitter {
     };
 
     // 自动保存配置
-    this.autoSaveInterval = 30000; // 30秒
+    this.autoSaveInterval = options.saveInterval ?? 30000;
+    this.persistFailures = options.persistFailures !== false;
     this.autoSaveTimer = null;
+    this.savePromise = Promise.resolve();
+    this.runIdentity = null;
+    this.artifactHashes = new Map();
   }
 
   /**
@@ -42,6 +56,9 @@ export class StateManager extends EventEmitter {
           startTime: null,
         }
       );
+
+      this.reset();
+      this.runIdentity = progress.runIdentity || null;
 
       // 恢复Set和Map数据结构
       progress.processedUrls.forEach((url) => this.state.processedUrls.add(url));
@@ -70,7 +87,11 @@ export class StateManager extends EventEmitter {
         this.pathService.getMetadataPath('urlMapping'),
         {}
       );
-      Object.entries(urlMapping).forEach(([url, data]) => this.state.urlToFile.set(url, data.path));
+      // Versioned progress is the atomic source of truth; sidecars are legacy exports.
+      Object.entries(progress.artifacts || urlMapping).forEach(([url, data]) => {
+        this.state.urlToFile.set(url, data.path);
+        if (data.sha256) this.artifactHashes.set(url, data.sha256);
+      });
 
       this._enforceDisjointState('load');
 
@@ -81,6 +102,7 @@ export class StateManager extends EventEmitter {
 
       this.emit('loaded', this.getStats());
     } catch (error) {
+      this.reset();
       this.logger.warn('状态加载失败，使用空状态', { error: error.message });
       this.emit('load-error', error);
     }
@@ -90,6 +112,12 @@ export class StateManager extends EventEmitter {
    * 保存状态到磁盘
    */
   async save(force = false) {
+    const pending = this.savePromise.then(() => this._save(force));
+    this.savePromise = pending.catch(() => {});
+    return pending;
+  }
+
+  async _save(force) {
     try {
       const now = Date.now();
 
@@ -109,9 +137,14 @@ export class StateManager extends EventEmitter {
         urlToIndexObj[url] = index;
       });
 
-      await this.fileService.writeJson(this.pathService.getMetadataPath('progress'), {
+      const progress = {
+        version: 2,
+        runIdentity: this.runIdentity,
+        artifacts: Object.fromEntries([...this.state.urlToFile].map(([url, path]) => [url, {
+          path, sha256: this.artifactHashes.get(url),
+        }])),
         processedUrls: Array.from(this.state.processedUrls),
-        failedUrls: Array.from(this.state.failedUrls.entries()).map(([url, error]) => ({
+        failedUrls: (this.persistFailures ? Array.from(this.state.failedUrls.entries()) : []).map(([url, error]) => ({
           url,
           error,
         })),
@@ -119,7 +152,7 @@ export class StateManager extends EventEmitter {
         startTime: this.state.startTime,
         savedAt: new Date().toISOString(),
         stats: this.getStats(),
-      });
+      };
 
       // 保存图片加载失败记录
       const imageFailures = Array.from(this.state.imageLoadFailures).map((url) => ({
@@ -140,6 +173,8 @@ export class StateManager extends EventEmitter {
         };
       });
       await this.fileService.writeJson(this.pathService.getMetadataPath('urlMapping'), urlMapping);
+      // Commit last: failures never publish a partially written new checkpoint.
+      await this.fileService.writeJson(this.pathService.getMetadataPath('progress'), progress);
 
       this.state.lastSaveTime = now;
       this.logger.debug('状态保存完成');
@@ -147,6 +182,7 @@ export class StateManager extends EventEmitter {
     } catch (error) {
       this.logger.error('状态保存失败', { error: error.message });
       this.emit('save-error', error);
+      if (force) throw error;
     }
   }
 
@@ -191,6 +227,7 @@ export class StateManager extends EventEmitter {
     this.autoSaveTimer = setInterval(() => {
       this.save().catch((error) => this.logger.error('自动保存失败', { error: error.message }));
     }, this.autoSaveInterval);
+    this.autoSaveTimer.unref?.();
 
     this.logger.info('启动自动保存', {
       间隔: `${this.autoSaveInterval / 1000}秒`,
@@ -214,6 +251,55 @@ export class StateManager extends EventEmitter {
   setUrlIndex(url, index) {
     this.state.urlToIndex.set(url, index);
     this.state.indexToUrl.set(index, url);
+  }
+
+  /** A checkpoint belongs to one ordered selection and acquisition configuration. */
+  async prepareRun(urls, config) {
+    await this.savePromise;
+    const acquisition = { ...config };
+    for (const key of ['_runtime', 'logLevel', 'concurrency', 'network', 'queue', 'state',
+      'python', 'output', 'retryFailedUrls', 'maxRetries', 'retryDelay', 'pageTimeout']) delete acquisition[key];
+    if (config.markdown?.enabled && config.markdownPdf?.enabled && config.markdownPdf.batchMode) {
+      delete acquisition.pdf;
+      acquisition.markdownPdf = { enabled: true, batchMode: true };
+    }
+    const identity = createHash('sha256').update(stableJson({ version: 1, urls, acquisition })).digest('hex');
+    const resumed = this.runIdentity === identity;
+    if (!resumed) this.reset();
+    this.runIdentity = identity;
+    this.state.urlToIndex.clear();
+    this.state.indexToUrl.clear();
+    urls.forEach((url, index) => this.setUrlIndex(url, index));
+    return resumed;
+  }
+
+  async recordArtifact(url, filePath) {
+    const hash = await this.fileService.hashFile(filePath);
+    this.artifactHashes.set(url, hash);
+    this.markProcessed(url, filePath);
+  }
+
+  async canResume(url) {
+    if (!this.isProcessed(url) || !this.artifactHashes.has(url)) return false;
+    try {
+      if (await this.fileService.hashFile(this.state.urlToFile.get(url)) === this.artifactHashes.get(url)) return true;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    this.state.processedUrls.delete(url);
+    this.state.urlToFile.delete(url);
+    this.artifactHashes.delete(url);
+    return false;
+  }
+
+  async getArtifacts() {
+    const artifacts = [];
+    for (const [url, index] of this.state.urlToIndex) {
+      if (!await this.canResume(url)) throw new Error(`Missing or changed artifact: ${url}`);
+      artifacts.push({ url, index: String(index), path: this.state.urlToFile.get(url), sha256: this.artifactHashes.get(url) });
+    }
+    if (artifacts.length === 0) throw new Error('No current-run artifacts');
+    return artifacts.sort((a, b) => Number(a.index) - Number(b.index));
   }
 
   /**
@@ -243,6 +329,8 @@ export class StateManager extends EventEmitter {
   markFailed(url, error) {
     const errorMessage = error?.message || String(error);
     this.state.processedUrls.delete(url);
+    this.state.urlToFile.delete(url);
+    this.artifactHashes.delete(url);
     this.state.failedUrls.set(url, errorMessage);
     this.emit('url-failed', { url, error: errorMessage });
   }
@@ -295,6 +383,8 @@ export class StateManager extends EventEmitter {
    * 重置状态
    */
   reset() {
+    this.runIdentity = null;
+    this.artifactHashes.clear();
     this.state.processedUrls.clear();
     this.state.failedUrls.clear();
     this.state.urlToIndex.clear();

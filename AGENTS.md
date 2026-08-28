@@ -76,7 +76,7 @@ make install          # Install Node + Python deps (creates .venv via uv)
 make run             # Scrape and generate PDFs
 npm start            # Alternative to make run
 make clean           # Remove pdfs/* and metadata
-make clean-cache     # Remove translation cache and metadata (keep PDFs)
+make clean-cache     # Remove default HTTP/translation caches and metadata (keep PDFs)
 ```
 
 ### Testing & Quality
@@ -124,7 +124,7 @@ make clean-venv          # Remove and recreate Python .venv
 ## Code Standards & Conventions
 
 ### Language & Style
-- **JavaScript:** ESM modules (`type: module`), Node.js ≥ 18.18 (required by ESLint 9.x and tooling)
+- **JavaScript:** ESM modules (`type: module`), Node.js >= 24 (aligned with Puppeteer, ESLint and CI)
 - **Async patterns:** Use `async/await`, avoid callbacks
 - **Indentation:** 2 spaces (JavaScript), 4 spaces (Python)
 - **Naming:**
@@ -200,7 +200,7 @@ npx vitest run tests/services/fileService.test.js
 
 - `config.json` holds **shared** settings (PDF/translation/markdown/etc) and a `docTarget` pointer.
 - `doc-targets/*.json` holds **site-specific** settings (root/base URLs, selectors, domains, entry points, etc).
-- `config-profiles/*.json` holds **device-specific** overrides (Kindle profiles) that are merged into `config.json` via scripts/Makefile.
+- `config-profiles/*.json` holds **device-specific** overrides (Kindle profiles) selected per run with `PDF_PROFILE`; Makefile profile commands do not edit `config.json`.
 - `docTarget` can be overridden via env var `DOC_TARGET`.
 
 ### Essential Settings
@@ -253,13 +253,14 @@ npx vitest run tests/services/fileService.test.js
 3. Test with `node scripts/test-config-loading.js`
 4. Verify field appears with correct type (not undefined)
 
-**Why:** Fields not in Joi schema are silently removed during validation (`stripUnknown: true`)
+**Why:** ConfigLoader rejects unknown user fields (`stripUnknown: false`). The programmatic validator still supports explicit stripping for callers that need it.
 
 ## Security & Best Practices
 
 ### Security
 - Use `validateSafePath()` for all file operations
 - Never commit secrets or API keys
+- Use trusted documentation only: HTTP checks and disabled XeLaTeX shell escape are not a full renderer sandbox. See README security boundary.
 - Validate all configuration inputs
 - Keep `allowedDomains` strict
 - Default headless browser recommended
@@ -365,7 +366,7 @@ node scripts/use-kindle-config.js current
 
 ### Configuration Issues
 - **Problem**: Configuration field is `undefined` at runtime.
-- **Cause**: Joi validation strips unknown fields by default (`stripUnknown: true`).
+- **Cause**: Programmatic Joi validation may strip unknown fields. ConfigLoader instead rejects unknown user settings with a diagnostic.
 - **Fix**: You MUST define the field in `src/config/configValidator.js` BEFORE adding it to JSON files.
 
 ### Service State Conflicts

@@ -4,12 +4,30 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from contextlib import contextmanager
 
 import pymupdf
 
 
 def compact(text):
     return re.sub(r"\s+", "", text.translate(str.maketrans("‘’“”", "''\"\"")))
+
+
+def contains_text(expected, actual):
+    # PDF text includes discretionary line-end hyphens; retain the literal
+    # comparison too so authored hyphens are not silently erased.
+    return (compact(expected) in compact(actual)
+            or compact(expected) in compact(re.sub(r"(?<=\w)-\s*\n\s*(?=\w)", "", actual)))
+
+
+@contextmanager
+def glyph_height_boxes():
+    previous = pymupdf.TOOLS.set_small_glyph_heights()
+    pymupdf.TOOLS.set_small_glyph_heights(True)
+    try:
+        yield
+    finally:
+        pymupdf.TOOLS.set_small_glyph_heights(previous)
 
 
 def destination_key(link):
@@ -20,7 +38,7 @@ def destination_key(link):
 def inspect_pdf(pdf_path, expectations=None):
     expectations = expectations or {}
     issues = []
-    with pymupdf.open(pdf_path) as doc:
+    with glyph_height_boxes(), pymupdf.open(pdf_path) as doc:
         if doc.needs_pass or not doc.page_count:
             raise ValueError("PDF must be readable and contain pages")
         detailed_outline = doc.get_toc(simple=False)
@@ -32,6 +50,10 @@ def inspect_pdf(pdf_path, expectations=None):
         toc_links = {}
         toc_annotations = 0
         for index, page in enumerate(doc):
+            for dimension, expected_key in [(page.rect.width, "pageWidthPt"), (page.rect.height, "pageHeightPt")]:
+                if expected_key in expectations and abs(dimension - expectations[expected_key]) > 1:
+                    issues.append({"kind": "page_size", "page": index + 1,
+                                   "dimension": expected_key, "actual": dimension, "expected": expectations[expected_key]})
             text = page.get_text()
             texts.append(text)
             words = page.get_text("words", clip=pymupdf.INFINITE_RECT())
@@ -53,7 +75,19 @@ def inspect_pdf(pdf_path, expectations=None):
                 box = pymupdf.Rect(coords) * page.rotation_matrix
                 left = expectations.get("marginLeftPt", 0)
                 right = page.rect.width - expectations.get("marginRightPt", 0)
-                if box.x0 < left - 2 or box.x1 > right + 2 or box.y0 < -2 or box.y1 > page.rect.height + 2:
+                top = expectations.get("marginTopPt", 0)
+                bottom = page.rect.height - expectations.get("marginBottomPt", 0)
+                # A generated page label is allowed in the footer, not arbitrary text/images.
+                footer = (value == page.get_label() and (box.y0 + box.y1) / 2 >= bottom
+                          and box.y1 <= page.rect.height and box.x0 > page.rect.width * 0.35
+                          and box.x1 < page.rect.width * 0.65)
+                # Word rectangles include font ascenders/descenders, not only ink.
+                # TeX positions the first baseline using topskip; large headings
+                # can extend that rectangle above the text block without clipping.
+                vertical_tolerance = 2 if value == "image" else max(4, box.height * 0.4)
+                if (box.x0 < left - 2 or box.x1 > right + 2 or box.y0 < -2 or box.y1 > page.rect.height + 2
+                        or box.y0 < top - vertical_tolerance
+                        or (box.y1 > bottom + vertical_tolerance and not footer)):
                     issues.append({"kind": "overflow", "page": index + 1,
                                    "text": value, "box": list(box)})
             for link in page.get_links():
@@ -90,15 +124,32 @@ def inspect_pdf(pdf_path, expectations=None):
             has_children = position + 1 < len(outline) and outline[position + 1][0] > level
             if not 1 <= page_number <= len(doc):
                 issues.append({"kind": "invalid_bookmark", "title": title})
-            elif (expectations.get("requireToc") or not has_children) and compact(title) not in compact(texts[page_number - 1]):
+            elif (expectations.get("requireToc") or not has_children) and not contains_text(title, texts[page_number - 1]):
                 issues.append({"kind": "bookmark_title", "title": title, "page": page_number})
             if level <= 2 and page_number > 0:
                 preview_pages.add(page_number - 1)
-        full_text = compact("\n".join(texts))
+        body_text = "\n".join(text for i, text in enumerate(texts) if i not in toc_pages)
+        full_text = "\n".join(texts)
         found_titles = [title for title in expectations.get("candidateTitles", [])
-                        if compact(title) in full_text]
+                        if contains_text(title, body_text)]
+        for snippet in expectations.get("bodySnippets", []):
+            if not contains_text(snippet, body_text):
+                issues.append({"kind": "missing_body_content", "snippet": snippet})
+        for title in expectations.get("articleTitles", []):
+            matches = [(i, entry) for i, entry in enumerate(outline) if entry[1] == title and entry[0] == 2]
+            if len(matches) != 1:
+                issues.append({"kind": "article_bookmark", "title": title})
+                continue
+            position, entry = matches[0]
+            start = entry[2] - 1
+            end = next((item[2] - 1 for item in outline[position + 1:] if item[0] <= 2), len(doc))
+            article_text = compact("\n".join(texts[start:end]))
+            for _, heading, _ in outline:
+                article_text = article_text.replace(compact(heading), "")
+            if not re.sub(r"[\W\d_]+", "", article_text) and not any(doc[i].get_image_info() for i in range(start, end)):
+                issues.append({"kind": "empty_article_body", "title": title, "page": start + 1})
         for title in expectations.get("titles", []):
-            if compact(title) not in full_text:
+            if not contains_text(title, full_text):
                 issues.append({"kind": "missing_title", "title": title})
         for title in expectations.get("groups", []):
             if title not in [entry[1] for entry in outline if entry[0] == 1]:
@@ -110,7 +161,9 @@ def inspect_pdf(pdf_path, expectations=None):
                 issues.append({"kind": "toc_targets", "links": len(toc_links), "bookmarks": len(outline)})
         if expectations.get("requireImages") and not any(page.get_image_info() for page in doc):
             issues.append({"kind": "missing_image"})
-        preview_pages.update(issue["page"] - 1 for issue in issues if "page" in issue)
+        # Keep diagnostics bounded even when one defect affects an entire book.
+        issue_pages = sorted({issue["page"] - 1 for issue in issues if "page" in issue})
+        preview_pages.update(issue_pages[:12])
         return {
             "pdf": str(Path(pdf_path).resolve()), "pages": len(doc),
             "outlineEntries": len(outline), "tocPages": [i + 1 for i in toc_pages],
@@ -134,6 +187,10 @@ def main():
     report_path = args.report_dir / "report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     if args.render:
+        # Reusing a report directory must not leave previews from an older PDF.
+        for previous in args.report_dir.glob("page-*.png"):
+            if re.fullmatch(r"page-\d+\.png", previous.name):
+                previous.unlink()
         for page in report["previewPages"]:
             subprocess.run([
                 "pdftoppm", "-f", str(page), "-l", str(page), "-singlefile", "-r", "110", "-png",

@@ -1,4 +1,5 @@
 import path from 'path';
+import { checkToolchain } from './utils/toolchain.js';
 import { createContainer, shutdownContainer, getContainerHealth } from './core/setup.js';
 import { createLogger } from './utils/logger.js';
 import { verifyPdf } from './services/pdf/pdfVerification.js';
@@ -57,6 +58,7 @@ class Application {
    * 初始化应用程序
    */
   async initialize() {
+    if (this.container) return;
     try {
       this.startTime = Date.now();
       this.logger.info('🚀 Starting PDF Scraper Application...');
@@ -204,6 +206,8 @@ class Application {
 
       const config = await this.container.get('config');
       const markdownToPdfService = await this.container.get('markdownToPdfService');
+      const stateManager = await this.container.get('stateManager');
+      const artifacts = await stateManager.getArtifacts();
 
       const pdfDir = config.pdfDir || 'pdfs';
       const markdownDir = path.join(pdfDir, config.markdown?.outputDir || 'markdown');
@@ -220,7 +224,7 @@ class Application {
       const result = await markdownToPdfService.generateBatchPdf(
         markdownDir,
         outputPath,
-        config.markdownPdf || {}
+        { ...config.markdownPdf, artifacts }
       );
 
       const batchTime = Date.now() - batchStartTime;
@@ -319,6 +323,7 @@ class Application {
         config, processRunner: this.processRunner,
         expectations: {
           candidateTitles: titles,
+          articleTitles: config.markdownPdf?.batchMode && config.markdownPdf.toc !== false ? titles : [],
           groups: config.markdownPdf?.batchMode
             ? (structure?.sections || []).map((section) => section.title) : [],
         },
@@ -430,6 +435,9 @@ async function main() {
 
   try {
     // 运行应用程序
+    await app.initialize();
+    const config = await app.container.get('config');
+    app.logger.info('Toolchain preflight', await checkToolchain(config, app.processRunner));
     const result = await app.run();
 
     console.log('\n' + '='.repeat(60));

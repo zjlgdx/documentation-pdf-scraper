@@ -146,6 +146,39 @@ describe('StateManager', () => {
   });
 
   describe('save', () => {
+    test('honors state saveInterval and persistFailures configuration', async () => {
+      const configured = new StateManager(mockFileService, mockPathService, mockLogger, {
+        saveInterval: 1000, persistFailures: false,
+      });
+      configured.markFailed('failed', new Error('network'));
+      configured.startAutoSave();
+      try {
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(mockFileService.writeJson).toHaveBeenCalledWith('/metadata/progress.json', expect.objectContaining({ failedUrls: [] }));
+      } finally { configured.stopAutoSave(); }
+    });
+    test('propagates a failed final flush so the run cannot report success', async () => {
+      mockFileService.writeJson.mockRejectedValue(new Error('disk full'));
+      await expect(stateManager.save(true)).rejects.toThrow('disk full');
+    });
+
+    test('serializes overlapping saves and flushes the latest state', async () => {
+      let release;
+      const blocked = new Promise((resolve) => { release = resolve; });
+      mockFileService.writeJson.mockImplementationOnce(() => blocked);
+      stateManager.markProcessed('first');
+      const first = stateManager.save(true);
+      await Promise.resolve();
+      stateManager.markProcessed('last');
+      const last = stateManager.save(true);
+      await Promise.resolve();
+      expect(mockFileService.writeJson).toHaveBeenCalledTimes(1);
+      release();
+      await Promise.all([first, last]);
+      const progressWrites = mockFileService.writeJson.mock.calls.filter(([p]) => p.endsWith('/progress.json'));
+      expect(progressWrites.at(-1)[1].processedUrls).toEqual(['first', 'last']);
+    });
+
     test('应该保存状态到磁盘', async () => {
       // 设置一些状态
       stateManager.state.processedUrls.add('url1');

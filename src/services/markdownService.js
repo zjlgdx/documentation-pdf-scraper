@@ -1,3 +1,4 @@
+import { mapMarkdownProse } from '../utils/markdownSegments.js';
 // src/services/markdownService.js
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import TurndownService from 'turndown';
@@ -114,6 +115,10 @@ export class MarkdownService {
       return markdown;
     }
 
+    return mapMarkdownProse(markdown, (segment) => this._normalizeProseUrls(segment, pageUrl), { inlineCode: true });
+  }
+
+  _normalizeProseUrls(markdown, pageUrl) {
     let normalized = markdown;
 
     // Markdown links/images: ![alt](/img.png) / [text](/guide)

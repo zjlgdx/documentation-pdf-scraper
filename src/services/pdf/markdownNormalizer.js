@@ -3,6 +3,7 @@ import { ValidationError } from '../../utils/errors.js';
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import { mdxFromMarkdown } from 'mdast-util-mdx';
 import { mdxjs } from 'micromark-extension-mdxjs';
+import { mapMarkdownProse } from '../../utils/markdownSegments.js';
 
 /** Content normalization only; no filesystem, network or renderer lifecycle. */
 export class MarkdownNormalizer {
@@ -26,7 +27,7 @@ export class MarkdownNormalizer {
    * @returns {string}
    * @private
    */
-  _stripMdxWithAst(content) {
+  _stripMdxWithAst(content, pageUrl) {
     if (!content) return content;
 
     try {
@@ -40,7 +41,9 @@ export class MarkdownNormalizer {
       const getAttr = (node, attrName) => {
         const attr = node.attributes?.find((a) => a.name === attrName);
         if (!attr) return '';
-        return typeof attr.value === 'string' ? attr.value : '';
+        if (typeof attr.value === 'string') return attr.value;
+        if (attr.value?.data?.estree) return this._staticMdxExpression(attr.value, content);
+        return '';
       };
 
       const collectEdits = (node) => {
@@ -50,7 +53,7 @@ export class MarkdownNormalizer {
         }
 
         if (node.type === 'mdxFlowExpression' || node.type === 'mdxTextExpression') {
-          edits.push([node.position.start.offset, node.position.end.offset, '']);
+          edits.push([node.position.start.offset, node.position.end.offset, this._staticMdxExpression(node, content)]);
           return;
         }
 
@@ -93,7 +96,7 @@ export class MarkdownNormalizer {
               const indent = Math.min(...nonBlankLines.map((line) => line.match(/^[ \t]*/)[0].length));
               innerContent = lines.map((line) => line.slice(indent)).join('\n');
             }
-            innerContent = this._stripMdxWithAst(innerContent);
+            innerContent = this._stripMdxWithAst(innerContent, pageUrl);
           }
 
           let replacement;
@@ -101,8 +104,19 @@ export class MarkdownNormalizer {
             case 'Steps':
             case 'Tabs':
             case 'AccordionGroup':
+            case 'CardGroup':
               replacement = innerContent;
               break;
+            case 'Card': {
+              const title = getAttr(node, 'title');
+              const target = getAttr(node, 'href');
+              const href = target && pageUrl ? new URL(target, pageUrl).href : target;
+              const label = title.replace(/[\\[\]]/g, '\\$&');
+              if (!title && !innerContent.trim()) throw new Error('Card has no static title or body');
+              const heading = href ? `[${label || href}](${href.replace(/[\s()]/g, encodeURIComponent)})` : label;
+              replacement = `\n${heading ? `**${heading}**\n\n` : ''}${innerContent}\n`;
+              break;
+            }
             case 'Step': {
               const title = getAttr(node, 'title');
               replacement = title ? `\n### ${title}\n\n${innerContent}\n` : `\n${innerContent}\n`;
@@ -127,6 +141,9 @@ export class MarkdownNormalizer {
               break;
             }
             default:
+              if (!innerContent.trim()) {
+                throw new Error(`Unsupported empty MDX component <${name}> at line ${node.position.start.line}; provide static content`);
+              }
               replacement = innerContent;
               break;
           }
@@ -153,6 +170,24 @@ export class MarkdownNormalizer {
     } catch (error) {
       throw new ValidationError(`Invalid MDX source: ${error.message}`);
     }
+  }
+
+  _staticMdxExpression(node) {
+    const statements = node.data?.estree?.body || [];
+    if (statements.length === 0) return ''; // MDX comments have no rendered value.
+    const expression = statements.length === 1 && statements[0].expression;
+    if (expression?.type === 'Literal') {
+      if (expression.value == null || typeof expression.value === 'boolean') return '';
+      if (['number', 'string'].includes(typeof expression.value)) return String(expression.value);
+    }
+    if (expression?.type === 'TemplateLiteral' && expression.expressions.length === 0) {
+      return expression.quasis[0].value.cooked;
+    }
+    if (expression?.type === 'UnaryExpression' && ['-', '+'].includes(expression.operator)
+        && expression.argument.type === 'Literal' && typeof expression.argument.value === 'number') {
+      return String(expression.operator === '-' ? -expression.argument.value : expression.argument.value);
+    }
+    throw new Error(`Unsupported dynamic MDX expression at line ${node.position?.start.line ?? '?'}; provide static content`);
   }
 
   /**
@@ -283,14 +318,7 @@ export class MarkdownNormalizer {
    * @private
    */
   _mapProseSegments(content, transform) {
-    if (!content) return content;
-
-    const segments = this._splitFencedCodeBlockSegments(content);
-    if (segments.length === 0) return content;
-
-    return segments
-      .map((segment) => (segment.type === 'prose' ? transform(segment.text) : segment.text))
-      .join('\n');
+    return mapMarkdownProse(content, transform);
   }
 
   /**
@@ -670,63 +698,43 @@ export class MarkdownNormalizer {
    * @returns {string}
    * @private
    */
-  _cleanMarkdownContent(content) {
+  _cleanMarkdownContent(content, pageUrl) {
     if (!content) return content;
 
     // Markdown and MDX have different grammars; choose explicitly, never retry a parser.
     let cleaned = this.config.markdownSource?.format === 'mdx'
-      ? this._stripMdxWithAst(content) : content;
+      ? this._stripMdxWithAst(content, pageUrl) : content;
 
-    // 1. 修复代码块中的 theme={...} 属性
-    // ```markdown theme={null} -> ```markdown
-    // 支持任意数量的反引号 (>=3)
-    cleaned = cleaned.replace(
-      /^([ \t]*(?:>[ \t]*)*)(`{3,})(\w+)\s+theme=\{[^}]+\}/gm,
-      '$1$2$3'
-    );
-
-    // 0.1 修复缩进
-    // 移除 2-4 个空格的缩进 (修复 <Step> 内容被识别为代码块的问题)
-    // Code indentation is semantic (notably in Python), so only adjust prose.
-    cleaned = this._mapProseSegments(cleaned, (segment) =>
-      segment.replace(/^[ \t]{2,4}(?=[^ \t\n])/gm, '')
-    );
-    // 移除以 | 开头的行前面的缩进 (修复表格被识别为代码块的问题)
-    cleaned = cleaned.replace(/^\s+(\|.*\|)\s*$/gm, '$1');
-
-    // 0.2 强制在表格前添加空行 (防止表格跟在文本后面被当成普通文本)
-    // 查找: 非空行(不以|开头) + 换行 + 表格头(|...|) + 换行 + 分隔线(|---|)
-    cleaned = cleaned.replace(
-      /(^[^|\n\r].*(?:\r?\n|\r))(\s*\|.*\|.*(?:\r?\n|\r)\s*\|[-: ]+\|)/gm,
-      '$1\n$2'
-    );
-
-    // 2. 修复代码块中一般的 React 属性 (key=value 或 key={value})
-    // ```javascript filename="app.js" -> ```javascript
-    cleaned = cleaned.replace(
-      /^([ \t]*(?:>[ \t]*)*)(`{3,})(\w+)\s+[\w-]+=(?:"[^"]*"|\{[^}]+\})/gm,
-      '$1$2$3'
-    );
-
-    // 2.1 清理代码块 info string 中多余的 token（例如文件路径）
-    // ```markdown path/to/file.md theme={null} -> ```markdown
-    // 保留 Pandoc 支持的属性块（{#id .class key=val}）
-    cleaned = cleaned.replace(
-      /^([ \t]*(?:>[ \t]*)*)(`{3,})(\w+)([^\n]*)$/gm,
-      (match, prefix, fence, lang, rest) => {
-        const trimmed = rest.trim();
-        if (!trimmed) return match;
-
-        const attrMatch = trimmed.match(/(^|\s)(\{[^}]*\})/);
-        if (attrMatch) {
-          return `${prefix}${fence}${lang} ${attrMatch[2]}`;
+    // Only normalize the outer fence header, never examples inside its body.
+    cleaned = this._splitFencedCodeBlockSegments(cleaned).map((segment) => {
+      if (segment.type !== 'code') return segment.text;
+      const lines = segment.text.split('\n');
+      lines[0] = lines[0].replace(
+        /^([ \t]*(?:>[ \t]*)*)(`{3,}|~{3,})([\w-]+)([^\n]*)$/,
+        (match, prefix, fence, lang, rest) => {
+          if (!rest.trim()) return match;
+          const attrs = rest.trim().match(/^(\{[^}]*\})$/);
+          return `${prefix}${fence}${lang}${attrs ? ` ${attrs[1]}` : ''}`;
         }
-
-        return `${prefix}${fence}${lang}`;
-      }
-    );
+      );
+      return lines.join('\n');
+    }).join('\n');
 
     cleaned = this._disableHighlightingForLongCodeBlocks(cleaned);
+
+    return this._mapProseSegments(cleaned, (segment) => this._cleanProse(segment));
+  }
+
+  _cleanProse(content) {
+    // Wrapper indentation is removed by the MDX AST transform. Markdown list
+    // and indented-code whitespace must not be globally dedented here.
+    let cleaned = content.replace(
+      /(^[^|\n\r].*(?:\r?\n|\r))(\|.*\|.*(?:\r?\n|\r)\|[-: ]+\|)/gm,
+      '$1\n$2'
+    );
+    // Authored prose filenames can use escaped underscores without backticks.
+    // Permit breaks after the visible underscore; never alter code examples.
+    cleaned = mapMarkdownProse(cleaned, (segment) => segment.replace(/\\_/g, '\\_\\allowbreak{}'), { inlineCode: true });
 
     // 3. 规范化表格分隔符行，防止某一列过宽导致其他列被压缩 (修复表格重叠问题)
     // 查找类似 | --- | :--- | ---: | 的行
@@ -1484,7 +1492,7 @@ export class MarkdownNormalizer {
       return content;
     }
 
-    return content.slice(endIndex + 5).trim();
+    return content.slice(endIndex + 5).replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd();
   }
 
   /**
@@ -1518,16 +1526,16 @@ export class MarkdownNormalizer {
 
     if (normalizedInjected === normalizedExisting) {
       // Remove the duplicate heading
-      return content.slice(match[0].length).trim();
+      return content.slice(match[0].length).replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd();
     }
 
     return content;
   }
 
-  _prepareArticleContentForBatch(content, title) {
+  _prepareArticleContentForBatch(content, title, pageUrl) {
     const withoutIndex = this._stripLeadingDocumentationIndexCallout(content);
     const withoutTitle = this._stripLeadingTitle(withoutIndex, title);
-    return this._demoteMarkdownHeadings(this._cleanMarkdownContent(withoutTitle));
+    return this._demoteMarkdownHeadings(this._cleanMarkdownContent(withoutTitle, pageUrl));
   }
 
   _stripLeadingDocumentationIndexCallout(content) {
@@ -1541,7 +1549,7 @@ export class MarkdownNormalizer {
 
     while (index < lines.length && /^>/.test(lines[index])) index++;
     while (index < lines.length && !lines[index].trim()) index++;
-    return lines.slice(index).join('\n').trim();
+    return lines.slice(index).join('\n').trimEnd();
   }
 
   _demoteMarkdownHeadings(content) {
