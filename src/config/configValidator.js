@@ -70,6 +70,18 @@ const configSchema = Joi.object({
     .optional()
     .description('Specific URLs to scrape directly, bypassing crawling'),
 
+  targetSections: Joi.array()
+    .items(
+      Joi.object({
+        title: Joi.string().trim().min(1).required(),
+        entryUrl: Joi.string().uri().required(),
+        urls: Joi.array().items(Joi.string().uri()).min(1).required(),
+      })
+    )
+    .min(1)
+    .optional()
+    .description('Ordered, titled groups of explicit URLs for a hierarchical document'),
+
   sectionTitles: Joi.object()
     .pattern(Joi.string().uri(), Joi.string())
     .optional()

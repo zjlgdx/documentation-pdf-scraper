@@ -192,8 +192,7 @@ export class PandocPdfService {
         timeoutMs: 120000,
       });
 
-      await this._runXeLatex(latexInputPath, latexWorkDir);
-      await this._runXeLatex(latexInputPath, latexWorkDir);
+      await this._runXeLatexUntilStable(latexInputPath, latexWorkDir);
 
       if (!fs.existsSync(latexOutputPath)) {
         throw new Error('PDF 文件未生成');
@@ -305,6 +304,24 @@ export class PandocPdfService {
         failureLabel: 'XeLaTeX 转换失败',
       }
     );
+  }
+
+  async _runXeLatexUntilStable(inputPath, outputDir) {
+    const stem = path.basename(inputPath, path.extname(inputPath));
+    let previousState;
+
+    for (let pass = 1; pass <= 5; pass++) {
+      await this._runXeLatex(inputPath, outputDir);
+      const currentState = ['aux', 'toc', 'out'].map((extension) => {
+        const filePath = path.join(outputDir, `${stem}.${extension}`);
+        return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+      }).join('\n');
+
+      if (pass > 1 && currentState === previousState) return;
+      previousState = currentState;
+    }
+
+    throw new Error('XeLaTeX references did not stabilize after 5 passes');
   }
 
   /**
@@ -550,6 +567,17 @@ export class PandocPdfService {
 
           // Lowercase/null → HTML element, recurse into children only
           if (!name || name[0] < 'A' || name[0] > 'Z') {
+            if (name === 'img') {
+              const classes = (getAttr(node, 'className') || getAttr(node, 'class')).split(/\s+/);
+              const theme = this.config.pdf?.theme || 'light';
+              const hiddenForTheme = theme === 'dark'
+                ? classes.includes('dark:hidden')
+                : classes.includes('hidden') && classes.some((value) => /^dark:(block|inline|flex)$/.test(value));
+              if (hiddenForTheme) {
+                edits.push([start, end, '']);
+                return;
+              }
+            }
             if (node.children) node.children.forEach(collectEdits);
             return;
           }
@@ -560,6 +588,17 @@ export class PandocPdfService {
             const innerStart = node.children[0].position.start.offset;
             const innerEnd = node.children[node.children.length - 1].position.end.offset;
             innerContent = content.slice(innerStart, innerEnd);
+
+            // Restore the first line's wrapper indentation before removing the
+            // common indent, so nested code indentation remains meaningful.
+            const lineStart = content.lastIndexOf('\n', innerStart - 1) + 1;
+            const linePrefix = content.slice(lineStart, innerStart);
+            if (/^[ \t]*$/.test(linePrefix)) {
+              const lines = (linePrefix + innerContent).split('\n');
+              const nonBlankLines = lines.filter((line) => line.trim());
+              const indent = Math.min(...nonBlankLines.map((line) => line.match(/^[ \t]*/)[0].length));
+              innerContent = lines.map((line) => line.slice(indent)).join('\n');
+            }
             innerContent = this._stripMdxWithAst(innerContent);
           }
 
@@ -673,19 +712,48 @@ export class PandocPdfService {
     if (!innerContent?.trim()) return '';
 
     const lines = innerContent.split('\n');
-    const quotedLines = [];
-    let firstContent = true;
+    while (lines.length > 0 && !lines[0].trim()) lines.shift();
+    while (lines.length > 0 && !lines[lines.length - 1].trim()) lines.pop();
+
+    const quotedLines = [`> **${label}:**`, '>'];
     for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      if (firstContent) {
-        quotedLines.push(`> **${label}:** ${trimmed}`);
-        firstContent = false;
-      } else {
-        quotedLines.push(`> ${trimmed}`);
-      }
+      quotedLines.push(line.trim() ? `> ${line.trimEnd()}` : '>');
     }
     return '\n' + quotedLines.join('\n') + '\n';
+  }
+
+  /**
+   * Disable syntax highlighting for code blocks containing lines too wide for
+   * Pandoc's token macros to break. Plain verbatim blocks still preserve the
+   * code exactly and are wrapped by fvextra in the generated PDF.
+   *
+   * @param {string} content
+   * @returns {string}
+   * @private
+   */
+  _disableHighlightingForLongCodeBlocks(content) {
+    const maxLineLength = this.config.pdf?.maxCodeLineLength || 100;
+
+    return this._splitFencedCodeBlockSegments(content)
+      .map((segment) => {
+        if (segment.type !== 'code') return segment.text;
+
+        const lines = segment.text.split('\n');
+        if (lines.length < 3) return segment.text;
+
+        const opening = lines[0].match(/^(\s*>?\s*)(`{3,}|~{3,})(.*)$/);
+        if (!opening || !opening[3].trim()) return segment.text;
+
+        const bodyLines = lines.slice(1, -1);
+        const hasUnsafeLine = bodyLines.some(
+          (line) => line.replace(/^\s*>\s?/, '').length > maxLineLength
+        );
+        if (!hasUnsafeLine) return segment.text;
+
+        lines[0] = `${opening[1]}${opening[2]}`;
+        return lines.join('\n');
+      })
+      .join('\n');
   }
 
   /**
@@ -716,7 +784,7 @@ export class PandocPdfService {
     };
 
     for (const line of lines) {
-      const fenceMatch = line.match(/^\s*>?\s*(`{3,}|~{3,})(.*)$/);
+      const fenceMatch = line.match(/^(?:[ \t]*>[ \t]*)*[ \t]*(`{3,}|~{3,})(.*)$/);
 
       if (!inFence && fenceMatch) {
         flush();
@@ -888,8 +956,8 @@ export class PandocPdfService {
     }
 
     const destinationStart = i;
-    let destinationSource = '';
-    let url = '';
+    let destinationSource;
+    let url;
 
     if (targetBody[i] === '<') {
       i++;
@@ -1472,6 +1540,50 @@ export class PandocPdfService {
 \RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines,breakanywhere,fontsize=\small}
 \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,fontsize=\small,commandchars=\\\{\}}
 \usepackage{xurl}
+\usepackage{microtype}
+\setlength{\emergencystretch}{2em}
+\usepackage{tocloft}
+\setlength{\cftbeforesecskip}{0.55em}
+\setlength{\cftbeforesubsecskip}{0.18em}
+\setlength{\cftbeforesubsubsecskip}{0.08em}
+\setlength{\cftsecindent}{0em}
+\setlength{\cftsubsecindent}{1.5em}
+\setlength{\cftsubsubsecindent}{3.0em}
+\setlength{\cftsecnumwidth}{0em}
+\setlength{\cftsubsecnumwidth}{0em}
+\setlength{\cftsubsubsecnumwidth}{0em}
+\cftsetpnumwidth{2.6em}
+\cftsetrmarg{3.6em}
+\renewcommand{\cftdotsep}{1.5}
+\renewcommand{\cftsecleader}{\cftdotfill{\cftdotsep}}
+\renewcommand{\cftsecfont}{\large\bfseries}
+\renewcommand{\cftsubsecfont}{\bfseries}
+\renewcommand{\cftsubsubsecfont}{\small}
+\renewcommand{\cftsecpagefont}{\bfseries}
+\renewcommand{\cftsubsubsecpagefont}{\small}
+\usepackage{needspace}
+\PassOptionsToPackage{pdfpagelabels=true}{hyperref}
+\makeatletter
+\AddToHook{begindocument/end}{%
+  \let\scraperTableOfContents\tableofcontents
+  \renewcommand{\tableofcontents}{%
+    \pagenumbering{roman}%
+    \scraperTableOfContents
+    \clearpage\pagenumbering{arabic}%
+  }%
+  \let\scraperSectionTocLine\l@section
+  \renewcommand{\l@section}{\Needspace{4\baselineskip}\scraperSectionTocLine}%
+  \let\scraperSubsectionTocLine\l@subsection
+  \renewcommand{\l@subsection}{\Needspace{3\baselineskip}\scraperSubsectionTocLine}%
+}
+\makeatother
+\usepackage{titlesec}
+\titleformat{\paragraph}[block]{\normalsize\bfseries}{}{0pt}{}
+\titlespacing*{\paragraph}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{0.6ex}
+\titleformat{\subparagraph}[block]{\normalsize\bfseries}{}{0pt}{}
+\titlespacing*{\subparagraph}{0pt}{1.2ex plus 0.4ex minus 0.2ex}{0.5ex}
+\let\scraperTexttt\texttt
+\renewcommand{\texttt}[1]{{\small\scraperTexttt{#1}}}
 `;
   }
 
@@ -1511,12 +1623,17 @@ export class PandocPdfService {
     // 1. 修复代码块中的 theme={...} 属性
     // ```markdown theme={null} -> ```markdown
     // 支持任意数量的反引号 (>=3)
-    cleaned = cleaned.replace(/^(`{3,})(\w+)\s+theme=\{[^}]+\}/gm, '$1$2');
+    cleaned = cleaned.replace(
+      /^([ \t]*(?:>[ \t]*)*)(`{3,})(\w+)\s+theme=\{[^}]+\}/gm,
+      '$1$2$3'
+    );
 
     // 0.1 修复缩进
     // 移除 2-4 个空格的缩进 (修复 <Step> 内容被识别为代码块的问题)
-    // 注意：这将影响所有缩进文本，但在这种上下文中通常是安全的
-    cleaned = cleaned.replace(/^[ \t]{2,4}(?=[^ \t\n])/gm, '');
+    // Code indentation is semantic (notably in Python), so only adjust prose.
+    cleaned = this._mapProseSegments(cleaned, (segment) =>
+      segment.replace(/^[ \t]{2,4}(?=[^ \t\n])/gm, '')
+    );
     // 移除以 | 开头的行前面的缩进 (修复表格被识别为代码块的问题)
     cleaned = cleaned.replace(/^\s+(\|.*\|)\s*$/gm, '$1');
 
@@ -1529,22 +1646,30 @@ export class PandocPdfService {
 
     // 2. 修复代码块中一般的 React 属性 (key=value 或 key={value})
     // ```javascript filename="app.js" -> ```javascript
-    cleaned = cleaned.replace(/^(`{3,})(\w+)\s+[\w-]+=(?:"[^"]*"|\{[^}]+\})/gm, '$1$2');
+    cleaned = cleaned.replace(
+      /^([ \t]*(?:>[ \t]*)*)(`{3,})(\w+)\s+[\w-]+=(?:"[^"]*"|\{[^}]+\})/gm,
+      '$1$2$3'
+    );
 
     // 2.1 清理代码块 info string 中多余的 token（例如文件路径）
     // ```markdown path/to/file.md theme={null} -> ```markdown
     // 保留 Pandoc 支持的属性块（{#id .class key=val}）
-    cleaned = cleaned.replace(/^(`{3,})(\w+)([^\n]*)$/gm, (match, fence, lang, rest) => {
-      const trimmed = rest.trim();
-      if (!trimmed) return match;
+    cleaned = cleaned.replace(
+      /^([ \t]*(?:>[ \t]*)*)(`{3,})(\w+)([^\n]*)$/gm,
+      (match, prefix, fence, lang, rest) => {
+        const trimmed = rest.trim();
+        if (!trimmed) return match;
 
-      const attrMatch = trimmed.match(/(^|\s)(\{[^}]*\})/);
-      if (attrMatch) {
-        return `${fence}${lang} ${attrMatch[2]}`;
+        const attrMatch = trimmed.match(/(^|\s)(\{[^}]*\})/);
+        if (attrMatch) {
+          return `${prefix}${fence}${lang} ${attrMatch[2]}`;
+        }
+
+        return `${prefix}${fence}${lang}`;
       }
+    );
 
-      return `${fence}${lang}`;
-    });
+    cleaned = this._disableHighlightingForLongCodeBlocks(cleaned);
 
     // 3. 规范化表格分隔符行，防止某一列过宽导致其他列被压缩 (修复表格重叠问题)
     // 查找类似 | --- | :--- | ---: | 的行
@@ -1568,6 +1693,7 @@ export class PandocPdfService {
     });
 
     cleaned = this._normalizeReferenceCardBlocks(cleaned);
+    cleaned = this._formatFieldReferenceTablesForPdf(cleaned);
     cleaned = this._formatReferenceTablesForPdf(cleaned);
     cleaned = this._formatMetricCatalogTablesForPdf(cleaned);
     cleaned = this._formatSandboxApprovalTablesForPdf(cleaned);
@@ -1579,7 +1705,7 @@ export class PandocPdfService {
 
     // 4b. Ensure a blank line between blockquote prose and blockquote list items
     // e.g. "> text\n> - item" -> "> text\n>\n> - item"
-    cleaned = cleaned.replace(/^(>.*[^\s-*].*)\n(>\s*[-*]\s+\S)/gm, '$1\n>\n$2');
+    cleaned = cleaned.replace(/^(>(?!\s*[-*]\s).+\S)\n(>\s*[-*]\s+\S)/gm, '$1\n>\n$2');
 
     // 4c. Convert ATX headings inside blockquotes to bold text.
     // Pandoc 3.9+ inserts `\mbox{}%` before `\subsection` inside `\begin{quote}`,
@@ -1623,6 +1749,14 @@ export class PandocPdfService {
     cleaned = this._constrainStandaloneRemoteImagesForPdf(cleaned);
     cleaned = this._formatStandaloneIconCardsForPdf(cleaned);
     cleaned = this._convertLongInlineCodeToBreakablePaths(cleaned);
+
+    // Keep generated callout labels on the same page as the following content.
+    cleaned = this._mapProseSegments(cleaned, (segment) =>
+      segment.replace(
+        /^(> \*\*(?:Note|Tip|Warning):\*\*)\n>\n/gm,
+        '$1\n>\n> \\nopagebreak[4]\n>\n'
+      )
+    );
 
     return cleaned;
   }
@@ -1775,6 +1909,50 @@ export class PandocPdfService {
     }
 
     return output.join('\n');
+  }
+
+  _formatFieldReferenceTablesForPdf(content) {
+    return this._mapProseSegments(String(content || ''), (segment) => {
+      const lines = segment.split('\n');
+      const output = [];
+
+      for (let index = 0; index < lines.length; index++) {
+        const headerCells = this._parseMarkdownTableRow(lines[index]);
+        const separatorCells = this._parseMarkdownTableRow(lines[index + 1] || '');
+        const normalizedHeader = headerCells?.map((cell) => cell.trim().toLowerCase());
+
+        if (
+          normalizedHeader?.join('|') !== 'field|required|description' ||
+          !this._isMarkdownTableSeparator(separatorCells)
+        ) {
+          output.push(lines[index]);
+          continue;
+        }
+
+        index += 2;
+        while (index < lines.length) {
+          const rowCells = this._parseMarkdownTableRow(lines[index]);
+          if (!rowCells || rowCells.length !== 3) break;
+
+          const [field, required, description] = rowCells;
+          output.push(
+            '',
+            '\\Needspace{4\\baselineskip}',
+            '',
+            `**Field:** ${field} \\hfill{} **Required:** ${required}`,
+            '',
+            '\\nopagebreak[4]',
+            '',
+            description
+          );
+          index++;
+        }
+
+        index--;
+      }
+
+      return output.join('\n');
+    });
   }
 
   _formatReferenceTableCell(cell) {
@@ -1933,12 +2111,26 @@ export class PandocPdfService {
     const cells = [];
     let current = '';
     const body = trimmed.slice(1, -1);
+    let inlineCodeTicks = 0;
 
     for (let index = 0; index < body.length; index++) {
       const char = body[index];
       const previous = index > 0 ? body[index - 1] : '';
 
-      if (char === '|' && previous !== '\\') {
+      if (char === '`') {
+        const tickCount = this._countBackticks(body, index);
+        const marker = '`'.repeat(tickCount);
+        current += marker;
+        if (inlineCodeTicks === 0) {
+          inlineCodeTicks = tickCount;
+        } else if (tickCount === inlineCodeTicks) {
+          inlineCodeTicks = 0;
+        }
+        index += tickCount - 1;
+        continue;
+      }
+
+      if (char === '|' && previous !== '\\' && inlineCodeTicks === 0) {
         cells.push(current.trim());
         current = '';
         continue;
@@ -2089,34 +2281,11 @@ export class PandocPdfService {
   }
 
   _convertLongInlineCodeToBreakablePaths(content) {
-    const lines = String(content || '').split('\n');
-    let inFence = false;
-    let fenceChar = '';
-    let fenceCount = 0;
-
-    return lines
-      .map((line) => {
-        const fenceMatch = line.match(/^(\s*)(`{3,}|~{3,})/);
-        if (fenceMatch) {
-          const char = fenceMatch[2][0];
-          const count = fenceMatch[2].length;
-          if (!inFence) {
-            inFence = true;
-            fenceChar = char;
-            fenceCount = count;
-          } else if (char === fenceChar && count >= fenceCount) {
-            inFence = false;
-          }
-          return line;
-        }
-
-        if (inFence || /^\s*#/.test(line)) {
-          return line;
-        }
-
-        return this._convertLongInlineCodeLineToBreakablePaths(line);
-      })
-      .join('\n');
+    return this._mapProseSegments(String(content || ''), (segment) =>
+      segment.split('\n')
+        .map((line) => /^\s*#/.test(line) ? line : this._convertLongInlineCodeLineToBreakablePaths(line))
+        .join('\n')
+    );
   }
 
   _convertLongInlineCodeLineToBreakablePaths(line) {
@@ -2161,16 +2330,17 @@ export class PandocPdfService {
     let searchIndex = startIndex;
 
     while (searchIndex < line.length) {
-      const closingIndex = line.indexOf(marker, searchIndex);
+      const closingIndex = line.indexOf('`', searchIndex);
       if (closingIndex === -1) {
         return -1;
       }
 
-      if (line[closingIndex + marker.length] !== '`') {
+      const tickCount = this._countBackticks(line, closingIndex);
+      if (tickCount === marker.length) {
         return closingIndex;
       }
 
-      searchIndex = closingIndex + marker.length;
+      searchIndex = closingIndex + tickCount;
     }
 
     return -1;
@@ -2179,8 +2349,8 @@ export class PandocPdfService {
   _convertInlineCodePath(code, marker) {
     const shouldConvert =
       code.includes('|')
-      || (code.length >= 24 && /[\\/._:-]/.test(code))
-      || (code.length >= 16 && !/[\\/._:\s-]/.test(code) && /[a-z0-9][A-Z]/.test(code));
+      || (code.length >= 12 && /[\\/._:[\]-]/.test(code))
+      || (code.length >= 12 && !/[\\/._:\s-]/.test(code) && /[a-z0-9][A-Z]/.test(code));
 
     if (!shouldConvert) {
       return `${marker}${code}${marker}`;
@@ -2191,7 +2361,7 @@ export class PandocPdfService {
 
   _escapeBreakableInlineCodeForLatex(code) {
     const escaped = [];
-    const breakAfter = new Set(['/', '\\', '.', '_', '-', ':', '|', ',', '=', '{', '}']);
+    const breakAfter = new Set(['/', '\\', '.', '_', '-', ':', '|', ',', '=', '{', '}', '[', ']']);
 
     for (let index = 0; index < code.length; index++) {
       const char = code[index];
@@ -2598,7 +2768,7 @@ export class PandocPdfService {
           articleTitles[pageIndex] || this._extractTitleFromContent(content) || `Page ${pageIndex}`;
 
         // Strip leading title from content if it duplicates the injected title
-        const cleanedContent = this._stripLeadingTitle(content, title);
+        const cleanedContent = this._prepareArticleContentForBatch(content, title);
 
         const pageBreak = addedPageCount > 0 ? '\\newpage\n\n' : '';
         parts.push(`${pageBreak}## ${title}\n\n${cleanedContent}\n`);
@@ -2623,7 +2793,7 @@ export class PandocPdfService {
 
       const title =
         (index && articleTitles[index]) || this._extractTitleFromContent(content) || file;
-      const cleanedContent = this._stripLeadingTitle(content, title);
+      const cleanedContent = this._prepareArticleContentForBatch(content, title);
       parts.push(`\\newpage\n\n## ${title}\n\n${cleanedContent}\n`);
 
       if (index) processedIndices.add(index);
@@ -2652,7 +2822,7 @@ export class PandocPdfService {
 
       const title =
         (index && articleTitles[index]) || this._extractTitleFromContent(content) || file;
-      const cleanedContent = this._stripLeadingTitle(content, title);
+      const cleanedContent = this._prepareArticleContentForBatch(content, title);
 
       // Add with page break (first page doesn't need break)
       if (parts.length > 0) {
@@ -2717,5 +2887,31 @@ export class PandocPdfService {
     }
 
     return content;
+  }
+
+  _prepareArticleContentForBatch(content, title) {
+    const withoutIndex = this._stripLeadingDocumentationIndexCallout(content);
+    const withoutTitle = this._stripLeadingTitle(withoutIndex, title);
+    return this._demoteMarkdownHeadings(this._stripMdxWithAst(withoutTitle));
+  }
+
+  _stripLeadingDocumentationIndexCallout(content) {
+    const lines = String(content || '').split('\n');
+    let index = 0;
+    while (index < lines.length && !lines[index].trim()) index++;
+
+    if (!/^>\s*##\s+Documentation Index\s*$/i.test(lines[index] || '')) {
+      return content;
+    }
+
+    while (index < lines.length && /^>/.test(lines[index])) index++;
+    while (index < lines.length && !lines[index].trim()) index++;
+    return lines.slice(index).join('\n').trim();
+  }
+
+  _demoteMarkdownHeadings(content) {
+    return this._mapProseSegments(content, (segment) =>
+      segment.replace(/^(#{1,5})(\s+)/gm, '#$1$2')
+    );
   }
 }

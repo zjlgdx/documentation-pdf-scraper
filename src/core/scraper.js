@@ -125,7 +125,25 @@ export class Scraper extends EventEmitter {
 
     this.logger.debug('Checking targetUrls', { targetUrls: this.config.targetUrls });
 
-    // 1. 优先检查 targetUrls 配置 (Explicit URLs mode)
+    // 1. Structured explicit URLs mode: preserve curated document sections.
+    if (Array.isArray(this.config.targetSections) && this.config.targetSections.length > 0) {
+      const sections = this.config.targetSections.map((section, index) => ({
+        index,
+        title: section.title,
+        entryUrl: section.entryUrl,
+        urls: section.urls,
+      }));
+      const urlCount = sections.reduce((total, section) => total + section.urls.length, 0);
+
+      this.logger.info('使用配置中的分组目标URL列表', {
+        sectionCount: sections.length,
+        urlCount,
+      });
+
+      return this._processCollectedUrls(sections);
+    }
+
+    // 2. Flat explicit URLs mode.
     if (
       this.config.targetUrls &&
       Array.isArray(this.config.targetUrls) &&

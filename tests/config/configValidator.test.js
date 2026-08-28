@@ -279,6 +279,29 @@ describe('ConfigValidator', () => {
       expect(result.config.baseUrl).toBe('https://example.com/docs/api');
     });
 
+    test('应该保留分组目标URL配置', () => {
+      const config = {
+        rootURL: 'https://example.com/docs',
+        pdfDir: './pdfs',
+        navLinksSelector: 'nav a',
+        contentSelector: 'main',
+        targetSections: [
+          {
+            title: 'Core workflow',
+            entryUrl: 'https://example.com/docs/core',
+            urls: [
+              'https://example.com/docs/core',
+              'https://example.com/docs/memory',
+            ],
+          },
+        ],
+      };
+
+      const result = validateConfig(config);
+
+      expect(result.config.targetSections).toEqual(config.targetSections);
+    });
+
     test('应该验证状态管理配置', () => {
       const config = {
         rootURL: 'https://example.com',

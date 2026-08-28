@@ -230,7 +230,7 @@ class PythonRunner {
         throw new Error(`Path is not a file: ${scriptPath}`);
       }
     } catch (error) {
-      throw new Error(`Script validation failed: ${error.message}`);
+      throw new Error(`Script validation failed: ${error.message}`, { cause: error });
     }
   }
 

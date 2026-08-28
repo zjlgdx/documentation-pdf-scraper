@@ -1,0 +1,66 @@
+{
+  "rootURL": "https://code.claude.com/docs/en/how-claude-code-works",
+  "baseUrl": "https://code.claude.com/docs/en/",
+  "navLinksSelector": "[id*='sidebar'] a[href*='/docs/en/']",
+  "contentSelector": "#content-area",
+  "allowedDomains": [
+    "code.claude.com"
+  ],
+  "ignoreURLs": [],
+  "markdownSource": {
+    "enabled": true,
+    "urlSuffix": ".md"
+  },
+  "sectionEntryPoints": [],
+  "targetSections": [
+    {
+      "title": "Working Effectively and Project Context",
+      "entryUrl": "https://code.claude.com/docs/en/how-claude-code-works",
+      "urls": [
+        "https://code.claude.com/docs/en/how-claude-code-works",
+        "https://code.claude.com/docs/en/best-practices",
+        "https://code.claude.com/docs/en/common-workflows",
+        "https://code.claude.com/docs/en/memory"
+      ]
+    },
+    {
+      "title": "Skills, Subagents, Hooks and MCP",
+      "entryUrl": "https://code.claude.com/docs/en/skills",
+      "urls": [
+        "https://code.claude.com/docs/en/skills",
+        "https://code.claude.com/docs/en/sub-agents",
+        "https://code.claude.com/docs/en/hooks-guide",
+        "https://code.claude.com/docs/en/mcp"
+      ]
+    },
+    {
+      "title": "Permissions, Isolation and Safe Parallel Work",
+      "entryUrl": "https://code.claude.com/docs/en/permissions",
+      "urls": [
+        "https://code.claude.com/docs/en/permissions",
+        "https://code.claude.com/docs/en/sandboxing",
+        "https://code.claude.com/docs/en/checkpointing",
+        "https://code.claude.com/docs/en/worktrees"
+      ]
+    },
+    {
+      "title": "Automation, Costs and Troubleshooting",
+      "entryUrl": "https://code.claude.com/docs/en/headless",
+      "urls": [
+        "https://code.claude.com/docs/en/headless",
+        "https://code.claude.com/docs/en/costs",
+        "https://code.claude.com/docs/en/debug-your-config",
+        "https://code.claude.com/docs/en/troubleshooting"
+      ]
+    }
+  ],
+  "enablePDFStyleProcessing": true,
+  "navigationStrategy": "load",
+  "urlCollectionWaitUntil": "load",
+  "translation": {
+    "enabled": false,
+    "bilingual": false,
+    "targetLanguage": "Simplified Chinese (简体中文)",
+    "concurrency": 2
+  }
+}

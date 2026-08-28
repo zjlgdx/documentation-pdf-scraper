@@ -56,9 +56,8 @@ async function inspectNavigation() {
         '[role="navigation"]',
       ];
 
-      let sidebar = null;
       for (const selector of sidebarSelectors) {
-        sidebar = document.querySelector(selector);
+        const sidebar = document.querySelector(selector);
         if (sidebar) {
           results.sidebarStructure.push({
             selector,

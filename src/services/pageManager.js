@@ -49,7 +49,7 @@ export class PageManager extends EventEmitter {
     }
 
     let browser = null;
-    let page = null;
+    let page;
 
     try {
       // 从浏览器池获取浏览器实例

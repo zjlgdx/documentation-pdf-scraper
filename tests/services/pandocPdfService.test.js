@@ -157,6 +157,19 @@ describe('PandocPdfService', () => {
       );
     });
 
+    it('should apply publication-quality TOC typography and spacing', () => {
+      const header = service._getPandocHeaderContent();
+
+      expect(header).toContain('\\usepackage{tocloft}');
+      expect(header).toContain('\\setlength{\\cftsubsecindent}{1.5em}');
+      expect(header).toContain('\\setlength{\\cftsubsubsecindent}{3.0em}');
+      expect(header).toContain('\\renewcommand{\\cftdotsep}{1.5}');
+      expect(header).toContain('\\renewcommand{\\cftsecfont}{\\large\\bfseries}');
+      expect(header).toContain('\\renewcommand{\\cftsubsubsecfont}{\\small}');
+      expect(header).toContain('\\pagenumbering{roman}');
+      expect(header).toContain('\\clearpage\\pagenumbering{arabic}');
+    });
+
     it('should allow overriding the CJK main font from config', () => {
       const customService = new PandocPdfService({
         logger: mockLogger,
@@ -224,6 +237,67 @@ describe('PandocPdfService', () => {
       expect(combined).toMatch(/^# Section\n\n## First/);
       expect(combined).toContain('\\newpage\n\n## Second');
       expect(combined).not.toContain('# Section\n\n\\newpage');
+    });
+
+    it('builds a readable three-level TOC hierarchy from indexed MDX pages', () => {
+      fs.writeFileSync(
+        path.join(tempDir, '000-first.md'),
+        [
+          '---',
+          'title: First',
+          '---',
+          '> ## Documentation Index',
+          '> Fetch the complete documentation index at: https://example.com/llms.txt',
+          '> Use this file to discover all available pages before exploring further.',
+          '',
+          '# First',
+          '',
+          'Intro.',
+          '',
+          '## Main topic',
+          '',
+          '### Detail excluded from a depth-three TOC',
+          '',
+          '```md',
+          '# Example heading must stay unchanged',
+          '```',
+        ].join('\n')
+      );
+
+      const combined = service._concatenateMarkdownFiles(
+        tempDir,
+        ['000-first.md'],
+        { sections: [{ title: 'Section', pages: [{ index: '0' }] }] },
+        { 0: 'First' }
+      );
+
+      expect(combined.match(/^# Section$/gm)).toHaveLength(1);
+      expect(combined.match(/^## First$/gm)).toHaveLength(1);
+      expect(combined).not.toMatch(/^# First$/m);
+      expect(combined).toContain('### Main topic');
+      expect(combined).toContain('#### Detail excluded from a depth-three TOC');
+      expect(combined).toContain('# Example heading must stay unchanged');
+      expect(combined).not.toContain('Documentation Index');
+    });
+
+    it('keeps MDX steps below the article main sections in the TOC hierarchy', () => {
+      const content = [
+        '# First',
+        '',
+        '## Workflow',
+        '',
+        '<Steps>',
+        '  <Step title="Explore">',
+        '    Read the code.',
+        '  </Step>',
+        '</Steps>',
+      ].join('\n');
+
+      const result = service._prepareArticleContentForBatch(content, 'First');
+
+      expect(result).toContain('### Workflow');
+      expect(result).toContain('#### Explore');
+      expect(result).not.toMatch(/^### Explore$/m);
     });
   });
 
@@ -322,6 +396,14 @@ describe('PandocPdfService', () => {
       expect(result).toBe(expected);
     });
 
+    it('should normalize fenced code attributes inside list items', () => {
+      const input = '* Run:\n\n  ```bash theme={null}\n  echo hello\n  ```';
+      const result = service._cleanMarkdownContent(input);
+
+      expect(result).toContain('  ```bash\n  echo hello\n  ```');
+      expect(result).not.toContain('theme={null}');
+    });
+
     it('should remove generic props from code blocks with 4 backticks', () => {
       const input = '````javascript filename="test.js"\ncontent\n````';
       const expected = '````javascript\ncontent\n````';
@@ -332,7 +414,7 @@ describe('PandocPdfService', () => {
     it('should convert Info component with list items to fully-quoted blockquote', () => {
       const input = '<Info>\n- Step 1\n- Step 2\n</Info>';
       const result = service._cleanMarkdownContent(input);
-      expect(result).toContain('> **Note:** - Step 1');
+      expect(result).toContain('> **Note:**\n>\n> \\nopagebreak[4]\n>\n> - Step 1');
       expect(result).toContain('> - Step 2');
       // No unquoted list items
       expect(result).not.toMatch(/^- Step/m);
@@ -341,15 +423,145 @@ describe('PandocPdfService', () => {
     it('should convert Tip component with multiline content to blockquote', () => {
       const input = '<Tip>\nDo this first.\n- Option A\n- Option B\n</Tip>';
       const result = service._cleanMarkdownContent(input);
-      expect(result).toContain('> **Tip:** Do this first.');
+      expect(result).toContain('> **Tip:**\n>\n> \\nopagebreak[4]\n>\n> Do this first.');
       expect(result).toContain('> - Option A');
       expect(result).toContain('> - Option B');
+    });
+
+    it('should preserve paragraph and fenced-code boundaries inside Tip components', () => {
+      const input = [
+        '<Tip>',
+        '  Use `jq` to extract the result:',
+        '',
+        '  ```bash theme={null}',
+        "  claude -p 'Summarize' --output-format json | jq -r '.result'",
+        '  ```',
+        '</Tip>',
+      ].join('\n');
+
+      const result = service._cleanMarkdownContent(input);
+
+      expect(result).toContain('> **Tip:**');
+      expect(result).toContain('>\n> Use `jq` to extract the result:');
+      expect(result).toContain('>\n> ```bash');
+      expect(result).toContain("claude -p 'Summarize'");
+      expect(result).not.toContain('theme={null}');
+    });
+
+    it('should preserve code indentation while removing MDX wrapper indentation', () => {
+      const input = [
+        '<Tip>',
+        '  Example:',
+        '',
+        '  ```python theme={null}',
+        '  def greet():',
+        '      return "hello"',
+        '  ```',
+        '</Tip>',
+        '',
+        '```python',
+        'def other():',
+        '    return True',
+        '```',
+      ].join('\n');
+
+      const result = service._cleanMarkdownContent(input);
+
+      expect(result).toContain('> def greet():\n>     return "hello"');
+      expect(result).toContain('def other():\n    return True');
+    });
+
+    it('should disable syntax highlighting only for fenced blocks with unsafe long lines', () => {
+      const longSchema = JSON.stringify({
+        type: 'object',
+        properties: { functions: { type: 'array', items: { type: 'string' } } },
+        required: ['functions'],
+      });
+      const input = [
+        '```bash',
+        `claude -p "Extract functions" --json-schema '${longSchema}'`,
+        '```',
+        '',
+        '```bash',
+        'echo short',
+        '```',
+      ].join('\n');
+
+      const result = service._cleanMarkdownContent(input);
+
+      expect(result).toMatch(/^```\nclaude -p/m);
+      expect(result).toContain('```bash\necho short\n```');
+    });
+
+    it('should linearize wide field reference tables for professional A4 layout', () => {
+      const input = [
+        '| Field | Required | Description |',
+        '| :--- | :--- | :--- |',
+        '| `name` | No | Display name shown in skill listings. |',
+        '| `shell` | No | Shell for `` !`command` `` and ` ```! ` blocks. |',
+      ].join('\n');
+
+      const result = service._cleanMarkdownContent(input);
+
+      expect(result).not.toContain('| Field | Required | Description |');
+      expect(result).toContain('**Field:** `name`');
+      expect(result).toContain('**Required:** No');
+      expect(result).toContain('\\hfill{} **Required:** No');
+      expect(result).toContain('\\nopagebreak[4]\n\nDisplay name shown in skill listings.');
+      expect(result).toContain('Display name shown in skill listings.');
+      expect(result).toContain('Shell for `` !`command` `` and ` ```! ` blocks.');
+      expect(result).not.toContain('\\allowbreak{}');
+    });
+
+    it('should keep callout labels with their content without changing code examples', () => {
+      const example = '```md\n> **Note:**\n>\n> Example note.\n```';
+      const input = '<Note>\nRead this before continuing.\n</Note>\n\n' + example;
+
+      const result = service._cleanMarkdownContent(input);
+
+      expect(result).toContain('> **Note:**\n>\n> \\nopagebreak[4]\n>\n> Read this before continuing.');
+      expect(result).not.toContain('\\Needspace');
+      expect(result).toContain(example);
+    });
+
+    it('should match complete backtick runs without swallowing surrounding prose', () => {
+      const input = 'Shell for `` !`command` `` and ` ```! ` blocks. Accepts `bash` or `powershell`. See [PowerShell tool](https://example.com/tools-reference#powershell-tool).';
+
+      const result = service._cleanMarkdownContent(input);
+
+      expect(result).toBe(input);
+      expect(result).not.toContain('\\texttt{');
+    });
+
+    it('should leave field reference table examples inside code fences unchanged', () => {
+      const input = [
+        '```md',
+        '| Field | Required | Description |',
+        '| --- | --- | --- |',
+        '| `name` | No | Display name. |',
+        '```',
+      ].join('\n');
+
+      expect(service._formatFieldReferenceTablesForPdf(input)).toBe(input);
+    });
+
+    it('should keep only the visible light-theme SVG from a theme pair', () => {
+      const input = [
+        '<img src="https://example.com/loop.svg" className="dark:hidden" alt="Loop" />',
+        '',
+        '<img src="https://example.com/loop-dark.svg" className="hidden dark:block" alt="Loop" />',
+      ].join('\n');
+
+      const result = service._cleanMarkdownContent(input);
+
+      expect(result).toContain('https://example.com/loop.svg');
+      expect(result).not.toContain('https://example.com/loop-dark.svg');
     });
 
     it('should convert Warning component to blockquote', () => {
       const input = '<Warning>\nDanger ahead!\n</Warning>';
       const result = service._cleanMarkdownContent(input);
-      expect(result).toContain('> **Warning:** Danger ahead!');
+      expect(result).toContain('> **Warning:**\n>\n> \\nopagebreak[4]\n>\n> Danger ahead!');
     });
 
     it('should remove empty list items inside blockquotes', () => {
@@ -490,7 +702,7 @@ describe('PandocPdfService', () => {
 
       const result = service._cleanMarkdownContent(input);
 
-      expect(result).toContain('**Key:** `standalone.key`');
+      expect(result).toContain('**Key:** \\texttt{standalone.\\allowbreak{}key}');
       expect(result).toContain('**Type / Values:** string');
       expect(result).toContain('**Details:** Only card details.');
     });
@@ -517,7 +729,7 @@ describe('PandocPdfService', () => {
         '\\texttt{\\$REPO\\_\\allowbreak{}ROOT/\\allowbreak{}.\\allowbreak{}agents/\\allowbreak{}plugins/\\allowbreak{}marketplace.\\allowbreak{}json}'
       );
       expect(result).toContain('`./`\\-prefixed path relative to the marketplace root');
-      expect(result).toContain('`interface.displayName`');
+      expect(result).toContain('\\texttt{interface.\\allowbreak{}display\\allowbreak{}Name}');
       expect(result).not.toContain('\\texttt{\\-\\allowbreak{}prefixed');
     });
 
@@ -934,6 +1146,32 @@ describe('PandocPdfService', () => {
           'webp'
         )
       ).toBe(true);
+    });
+  });
+
+  describe('_runXeLatexUntilStable', () => {
+    it('should run enough passes for TOC page numbers to converge', async () => {
+      let pass = 0;
+      const runSpy = vi.spyOn(service, '_runXeLatex').mockImplementation(async () => {
+        pass += 1;
+        fs.writeFileSync(path.join(tempDir, 'input.toc'), `page ${Math.min(pass, 2)}`);
+      });
+
+      await service._runXeLatexUntilStable(path.join(tempDir, 'input.tex'), tempDir);
+
+      expect(runSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('should fail instead of accepting a non-converging TOC', async () => {
+      let pass = 0;
+      vi.spyOn(service, '_runXeLatex').mockImplementation(async () => {
+        pass += 1;
+        fs.writeFileSync(path.join(tempDir, 'input.toc'), `page ${pass}`);
+      });
+
+      await expect(
+        service._runXeLatexUntilStable(path.join(tempDir, 'input.tex'), tempDir)
+      ).rejects.toThrow('did not stabilize after 5 passes');
     });
   });
 

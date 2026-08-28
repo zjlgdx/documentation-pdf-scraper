@@ -131,6 +131,7 @@ function stripDocSpecificConfig(config) {
     'sectionEntryPoints',
     'sectionTitles',
     'targetUrls',
+    'targetSections',
     'ignoreURLs',
     'allowedDomains',
     'enablePDFStyleProcessing',

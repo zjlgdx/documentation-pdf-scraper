@@ -58,7 +58,7 @@ class ConfigLoader {
       return this.config;
     } catch (error) {
       this.logger.error('Failed to load configuration:', error);
-      throw new Error(`Configuration loading failed: ${error.message}`);
+      throw new Error(`Configuration loading failed: ${error.message}`, { cause: error });
     }
   }
 
@@ -76,9 +76,9 @@ class ConfigLoader {
       }
     } catch (error) {
       if (error.code === 'ENOENT') {
-        throw new Error(`Configuration file not found: ${this.configPath}`);
+        throw new Error(`Configuration file not found: ${this.configPath}`, { cause: error });
       } else if (error.code === 'EACCES') {
-        throw new Error(`Configuration file is not readable: ${this.configPath}`);
+        throw new Error(`Configuration file is not readable: ${this.configPath}`, { cause: error });
       }
       throw error;
     }
@@ -134,7 +134,7 @@ class ConfigLoader {
       return processedConfig;
     } catch (error) {
       this.logger.error('Error processing configuration:', error);
-      throw new Error(`Configuration processing failed: ${error.message}`);
+      throw new Error(`Configuration processing failed: ${error.message}`, { cause: error });
     }
   }
 
@@ -239,7 +239,7 @@ class ConfigLoader {
     try {
       return JSON.parse(raw);
     } catch (error) {
-      throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
+      throw new Error(`Invalid JSON in ${filePath}: ${error.message}`, { cause: error });
     }
   }
 

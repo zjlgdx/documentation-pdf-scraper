@@ -218,6 +218,54 @@ describe('Scraper', () => {
       expect(mockPage.goto).toHaveBeenCalledWith('https://example.com', expect.any(Object));
     });
 
+    it('should preserve configured groups for curated explicit URLs', async () => {
+      mockDependencies.config.targetSections = [
+        {
+          title: 'Core workflow',
+          entryUrl: 'https://example.com/core',
+          urls: ['https://example.com/core', 'https://example.com/memory'],
+        },
+        {
+          title: 'Safety',
+          entryUrl: 'https://example.com/permissions',
+          urls: ['https://example.com/permissions'],
+        },
+      ];
+
+      const urls = await scraper.collectUrls();
+
+      expect(urls).toEqual([
+        'https://example.com/core',
+        'https://example.com/memory',
+        'https://example.com/permissions',
+      ]);
+      expect(mockDependencies.pageManager.createPage).not.toHaveBeenCalled();
+      expect(mockDependencies.metadataService.saveSectionStructure).toHaveBeenCalledWith({
+        sections: [
+          {
+            index: 0,
+            title: 'Core workflow',
+            entryUrl: 'https://example.com/core',
+            pages: [
+              { index: '0', url: 'https://example.com/core', order: 0 },
+              { index: '1', url: 'https://example.com/memory', order: 1 },
+            ],
+          },
+          {
+            index: 1,
+            title: 'Safety',
+            entryUrl: 'https://example.com/permissions',
+            pages: [{ index: '2', url: 'https://example.com/permissions', order: 0 }],
+          },
+        ],
+        urlToSection: {
+          'https://example.com/core': 0,
+          'https://example.com/memory': 0,
+          'https://example.com/permissions': 1,
+        },
+      });
+    });
+
     it('should throw if not initialized', async () => {
       scraper.isInitialized = false;
       await expect(scraper.collectUrls()).rejects.toThrow(ValidationError);

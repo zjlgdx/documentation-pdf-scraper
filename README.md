@@ -43,10 +43,11 @@ make install
 
 ### macOS host prerequisites
 - Node.js >= 18.18.0
-- Python >= 3.8 (for PDF processing)
+- Python >= 3.10 (for PDF processing)
 - uv (Python package/environment manager)
 - Pandoc
 - A LaTeX engine that provides `xelatex`
+- Cairo (`brew install cairo`) for SVG diagrams in generated PDFs
 
 ## Usage
 
@@ -123,9 +124,20 @@ Target-specific configurations (URLs, selectors, etc.) are stored in `doc-target
 ```bash
 npm run docs:openai      # Switch to OpenAI config
 npm run docs:claude      # Switch to Claude Code config
+npm run docs:claude-curated # Switch to 16 curated Claude Code pages in four sections
 npm run docs:current     # Show current target info
 npm run docs:list        # List all available targets
 ```
+
+For a focused Claude Code handbook with a hierarchical table of contents:
+
+```bash
+make docs-claude-curated
+make clean && make run
+```
+
+Curated targets use `targetSections` (ordered `title`, `entryUrl`, and `urls` groups)
+to keep the document structure reproducible without manual metadata edits.
 
 ## Architecture
 

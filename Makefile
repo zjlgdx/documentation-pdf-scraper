@@ -5,7 +5,7 @@ UV_ENV_DIR = .venv
 UV_PYTHON = $(UV_ENV_DIR)/bin/python
 NODE_MODULES = node_modules
 
-.PHONY: help install install-python install-node venv clean-venv clean clean-all clean-cache run run-clean test lint lint-fix ci verify-openclaw verify-openclaw-ci check-venv python-info kindle7 kindle-paperwhite kindle-oasis kindle-scribe kindle-all reset-config list-configs clean-kindle docs-openai docs-claude docs-openclaw docs-cloudflare docs-anthropic docs-53ai docs-claude-blog docs-current
+.PHONY: help install install-python install-node venv clean-venv clean clean-all clean-cache run run-clean test lint lint-fix ci verify-openclaw verify-openclaw-ci check-venv python-info kindle7 kindle-paperwhite kindle-oasis kindle-scribe kindle-all reset-config list-configs clean-kindle docs-openai docs-claude docs-claude-curated docs-openclaw docs-cloudflare docs-anthropic docs-53ai docs-claude-blog docs-current
 
 help:
 	@echo "Available commands:"
@@ -37,6 +37,7 @@ help:
 	@echo "Doc targets:"
 	@echo "  docs-openai       - Apply OpenAI docs configuration"
 	@echo "  docs-claude       - Apply Claude Code docs configuration"
+	@echo "  docs-claude-curated - Apply curated Claude Code docs configuration"
 	@echo "  docs-openclaw     - Apply OpenClaw zh-CN docs configuration"
 	@echo "  docs-cloudflare   - Apply Cloudflare Blog configuration"
 	@echo "  docs-anthropic    - Apply Anthropic Research configuration"
@@ -247,6 +248,9 @@ docs-openai:
 
 docs-claude:
 	@node $(DOC_TARGET_SCRIPT) use claude-code
+
+docs-claude-curated:
+	@node $(DOC_TARGET_SCRIPT) use claude-code-curated
 
 docs-openclaw:
 	@node $(DOC_TARGET_SCRIPT) use openclaw

@@ -53,7 +53,7 @@ async function main() {
     }
   );
 
-  let sitemapUrls = [];
+  let sitemapUrls;
   try {
     const sitemapXml = await fetchSitemapXml(DEFAULT_SITEMAP_URL);
     sitemapUrls = extractTargetUrlsFromSitemap(sitemapXml, {

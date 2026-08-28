@@ -585,7 +585,7 @@ export class MarkdownService {
         const parseModelCard = (island) => {
           if (!island) return null;
 
-          let props = {};
+          let props;
           try {
             props = decodeAstroValue(JSON.parse(island.getAttribute('props') || '{}'));
           } catch {

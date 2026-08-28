@@ -48,14 +48,14 @@ export function extractTargetUrlsFromSitemap(xml, options = {}) {
   const results = [];
   const seen = new Set();
 
-  let match = null;
+  let match;
   while ((match = urlRegex.exec(xml)) !== null) {
     const locValue = (match[1] || '').trim();
     if (!locValue) {
       continue;
     }
 
-    let normalizedUrl = null;
+    let normalizedUrl;
     try {
       normalizedUrl = normalizeHttpUrl(locValue, baseOrigin);
     } catch {

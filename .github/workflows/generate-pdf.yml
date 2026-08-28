@@ -70,6 +70,7 @@ jobs:
             texlive-lang-chinese \
             fonts-noto-cjk \
             fonts-lmodern \
+            libcairo2 \
             lmodern
 
       - name: Install latest Pandoc
