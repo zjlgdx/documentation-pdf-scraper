@@ -147,6 +147,7 @@ primary process or deterministic response validation failure. No API key is stor
     "provider": "agy",
     "model": "gemini-3.7-flash-medium",
     "includeIPA": true,
+    "ipaAccent": "uk",
     "fallback": {
       "provider": "codex",
       "model": "gpt-5.6-luna",
@@ -161,11 +162,18 @@ primary process or deterministic response validation failure. No API key is stor
 frontmatter remain byte-for-byte unchanged; generated notes are adjacent Markdown
 blockquotes. Valid empty annotations are accepted and do not invoke the fallback.
 
-`includeIPA` is opt-in (`false` by default). When enabled, single-word `word`
-annotations are enriched from a checksum-pinned [General American IPA dictionary](https://github.com/open-dict-data/ipa-dict)
-and rendered as “美式 IPA”. The 3.2 MB source is downloaded lazily and cached;
-phrases, unknown words, and entries with multiple pronunciations are omitted rather
-than guessed. The model never generates pronunciation text. See
+`includeIPA` is opt-in (`false` by default). `ipaAccent` accepts `uk` (default),
+`us`, or `both`; the rendered note labels each pronunciation as “英式 IPA” or
+“美式 IPA”. British pronunciations come from checksum-pinned
+[Britfone](https://github.com/JoseLlarena/Britfone), while American pronunciations
+come from checksum-pinned [ipa-dict](https://github.com/open-dict-data/ipa-dict).
+Both are normalized to familiar broad learner notation. For example, strict or
+narrow source symbols are presented as STRUT `/ʌ/`, phonemic `/l/`, and the
+conventional learner `/r/`; `bundle` is `/ˈbʌndəl/` in both dictionaries.
+Sources are downloaded lazily and cached. Phrases, unknown words, and entries
+with multiple pronunciations are omitted rather than guessed; selecting `both`
+still shows one accent when only that source has an unambiguous entry. The model
+never generates pronunciation text. See
 `THIRD_PARTY_NOTICES.md` for provenance and licensing.
 
 ### PDF verification

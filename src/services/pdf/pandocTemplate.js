@@ -14,15 +14,17 @@ export const pandocHeader = String.raw`\usepackage{fvextra}
 \newunicodechar{❌}{{\scraperSymbols\char"274C}}
 \newunicodechar{📊}{{\scraperSymbols\char"1F4CA}}
 \newunicodechar{📁}{{\scraperSymbols\char"1F4C1}}
-% The pinned en-US pronunciation dictionary uses this complete IPA symbol set.
-% Keep body typography unchanged and route only those glyphs to a portable font.
+% The normalized broad British and American pronunciations use this IPA symbol set.
+% Keep body typography unchanged and route these glyphs to a portable font.
 \newunicodechar{æ}{{\scraperIPA æ}}
 \newunicodechar{ð}{{\scraperIPA ð}}
 \newunicodechar{ŋ}{{\scraperIPA ŋ}}
 \newunicodechar{ɑ}{{\scraperIPA ɑ}}
 \newunicodechar{ɔ}{{\scraperIPA ɔ}}
+\newunicodechar{ɒ}{{\scraperIPA ɒ}}
 \newunicodechar{ə}{{\scraperIPA ə}}
 \newunicodechar{ɛ}{{\scraperIPA ɛ}}
+\newunicodechar{ɜ}{{\scraperIPA ɜ}}
 \newunicodechar{ɝ}{{\scraperIPA ɝ}}
 \newunicodechar{ɡ}{{\scraperIPA ɡ}}
 \newunicodechar{ɪ}{{\scraperIPA ɪ}}
@@ -30,9 +32,11 @@ export const pandocHeader = String.raw`\usepackage{fvextra}
 \newunicodechar{ɹ}{{\scraperIPA ɹ}}
 \newunicodechar{ʃ}{{\scraperIPA ʃ}}
 \newunicodechar{ʊ}{{\scraperIPA ʊ}}
+\newunicodechar{ʌ}{{\scraperIPA ʌ}}
 \newunicodechar{ʒ}{{\scraperIPA ʒ}}
 \newunicodechar{ˈ}{{\scraperIPA ˈ}}
 \newunicodechar{ˌ}{{\scraperIPA ˌ}}
+\newunicodechar{ː}{{\scraperIPA ː}}
 \newunicodechar{θ}{{\scraperIPA θ}}
 \fvset{codes*={\catcode"23F8=\active\catcode"2705=\active\catcode"274C=\active\catcode"1F4CA=\active\catcode"1F4C1=\active}}
 \RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines,breakanywhere,fontsize=\small}

@@ -411,6 +411,7 @@ describe('ConfigValidator', () => {
         density: 'standard',
         explanationLanguage: 'Simplified Chinese',
         includeIPA: false,
+        ipaAccent: 'uk',
         timeout: 300000,
         fallback: {
           provider: 'codex',
@@ -418,6 +419,34 @@ describe('ConfigValidator', () => {
           reasoningEffort: 'xhigh',
         },
       });
+    });
+
+    test.each(['uk', 'us', 'both'])('英语批注接受 %s IPA 口音选项', (ipaAccent) => {
+      const result = validateConfig({
+        rootURL: 'https://example.com',
+        pdfDir: './pdfs',
+        navLinksSelector: 'nav a',
+        contentSelector: 'main',
+        markdown: { enabled: true },
+        markdownPdf: { enabled: true },
+        annotations: { enabled: true, includeIPA: true, ipaAccent },
+      });
+
+      expect(result.config.annotations.ipaAccent).toBe(ipaAccent);
+    });
+
+    test('英语批注拒绝不支持的 IPA 口音选项', () => {
+      const config = {
+        rootURL: 'https://example.com',
+        pdfDir: './pdfs',
+        navLinksSelector: 'nav a',
+        contentSelector: 'main',
+        markdown: { enabled: true },
+        markdownPdf: { enabled: true },
+        annotations: { enabled: true, includeIPA: true, ipaAccent: 'au' },
+      };
+
+      expect(() => validateConfig(config)).toThrow(/annotations\.ipaAccent/);
     });
 
     test('英语批注要求 Markdown/Pandoc 工作流且不能与翻译同时启用', () => {

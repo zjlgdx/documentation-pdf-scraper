@@ -31,6 +31,7 @@
     "density": "standard",
     "explanationLanguage": "Simplified Chinese",
     "includeIPA": true,
+    "ipaAccent": "uk",
     "timeout": 300000,
     "fallback": {
       "provider": "codex",

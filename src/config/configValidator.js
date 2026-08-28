@@ -632,7 +632,12 @@ const configSchema = Joi.object({
 
     includeIPA: Joi.boolean()
       .default(false)
-      .description('Add verified General American IPA to single-word vocabulary notes'),
+      .description('Add normalized broad learner IPA to single-word vocabulary notes'),
+
+    ipaAccent: Joi.string()
+      .valid('uk', 'us', 'both')
+      .default('uk')
+      .description('Pronunciation accent: British, American, or both'),
 
     timeout: Joi.number()
       .integer()

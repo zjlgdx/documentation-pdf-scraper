@@ -8,8 +8,10 @@ The verifier works under the hood while the original English paragraph remains u
 >
 > - **under the hood**（惯用语）：表示系统内部实际发生的事情。
 >   *Example:* Under the hood, the app validates every file.
-> - **opaque**（生词 · 美式 IPA /oʊˈpeɪk/）：表示难以理解或不透明的。
->   *Example:* The configuration format can feel opaque at first.
+> - **bundle**（生词 · 英式 IPA /ˈbʌndəl/ · 美式 IPA /ˈbʌndəl/）：表示一组、一捆，或把内容打包在一起。
+>   *Example:* The build tool bundles all scripts into one file.
+> - **surface**（生词 · 英式 IPA /ˈsɜːfɪs/ · 美式 IPA /ˈsɜːrfəs/）：表示表面或显现出来。
+>   *Example:* The problem may surface during verification.
 
 Use `⏸ plan mode on` to pause; ✅ Include and ❌ Exclude must remain visible.
 

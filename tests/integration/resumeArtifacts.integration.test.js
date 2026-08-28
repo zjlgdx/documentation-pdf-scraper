@@ -63,6 +63,7 @@ describe('resume identity and batch artifacts', () => {
         level: 'high-school',
         density: 'standard',
         includeIPA: true,
+        ipaAccent: 'uk',
       },
     };
     await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });
@@ -87,6 +88,12 @@ describe('resume identity and batch artifacts', () => {
     expect(await state.prepareRun(urls, {
       ...annotatedConfig,
       annotations: { ...annotatedConfig.annotations, includeIPA: false },
+    }, { annotationContractVersion: 'test-v1' })).toBe(false);
+
+    await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });
+    expect(await state.prepareRun(urls, {
+      ...annotatedConfig,
+      annotations: { ...annotatedConfig.annotations, ipaAccent: 'both' },
     }, { annotationContractVersion: 'test-v1' })).toBe(false);
 
     await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });

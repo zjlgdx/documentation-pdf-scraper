@@ -231,9 +231,9 @@ describe('PandocPdfService', () => {
       );
     });
 
-    it('should route every en-US dictionary IPA symbol through DejaVu Sans', () => {
+    it('should route every normalized broad American IPA symbol through DejaVu Sans', () => {
       expect(pandocHeader).toContain('\\newfontfamily\\scraperIPA{DejaVu Sans}');
-      for (const symbol of [...'æðŋɑɔəɛɝɡɪɫɹʃʊʒˈˌθ']) {
+      for (const symbol of [...'æðŋɑɔɒəɛɜɝɡɪɹʃʊʌʒˈˌːθ']) {
         expect(pandocHeader).toContain(`\\newunicodechar{${symbol}}`);
       }
     });

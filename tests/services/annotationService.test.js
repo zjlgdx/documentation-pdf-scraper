@@ -121,25 +121,77 @@ describe('AnnotationService', () => {
     expect(result).not.toContain('\n\n\n- This gets the ball rolling');
   });
 
-  it('adds verified American IPA only to single-word vocabulary annotations', async () => {
-    const ipaService = { lookup: vi.fn().mockResolvedValue('/oʊˈpeɪk/') };
+  it('adds normalized broad American IPA only to single-word vocabulary annotations', async () => {
+    const ipaService = { lookup: vi.fn().mockResolvedValue('/ˈbʌndəl/') };
+    primaryClient.annotate.mockImplementation(({ segments }) => responseFor(segments, new Map([
+      [segments[0].text, [{
+        quote: 'bundle',
+        occurrence: 1,
+        type: 'word',
+        explanationZh: '表示一组、一捆，或把内容打包在一起。',
+        exampleEn: 'The build tool bundles all scripts into one file.',
+      }]],
+    ])));
+
+    const result = await createService({
+      annotations: { includeIPA: true, ipaAccent: 'us' },
+      ipaService,
+    }).annotateMarkdown('The build tool can bundle all scripts into one file.\n');
+
+    expect(ipaService.lookup).toHaveBeenCalledWith('bundle', 'us');
+    expect(result).toContain('**bundle**（生词 · 美式 IPA /ˈbʌndəl/）');
+  });
+
+  it('renders British and American learner IPA when both accents are selected', async () => {
+    const ipaService = {
+      lookup: vi.fn().mockImplementation(async (_word, accent) => ({
+        uk: '/ˈbʌndəl/',
+        us: '/ˈbʌndəl/',
+      })[accent]),
+    };
+    primaryClient.annotate.mockImplementation(({ segments }) => responseFor(segments, new Map([
+      [segments[0].text, [{
+        quote: 'bundle',
+        occurrence: 1,
+        type: 'word',
+        explanationZh: '表示一组、一捆，或把内容打包在一起。',
+        exampleEn: 'The build tool bundles all scripts into one file.',
+      }]],
+    ])));
+
+    const result = await createService({
+      annotations: { includeIPA: true, ipaAccent: 'both' },
+      ipaService,
+    }).annotateMarkdown('The build tool can bundle all scripts into one file.\n');
+
+    expect(ipaService.lookup).toHaveBeenCalledWith('bundle', 'uk');
+    expect(ipaService.lookup).toHaveBeenCalledWith('bundle', 'us');
+    expect(result).toContain('生词 · 英式 IPA /ˈbʌndəl/ · 美式 IPA /ˈbʌndəl/');
+  });
+
+  it('keeps an available accent when the other selected dictionary has no entry', async () => {
+    const ipaService = {
+      lookup: vi.fn().mockImplementation(async (_word, accent) => (
+        accent === 'us' ? '/oʊˈpeɪk/' : null
+      )),
+    };
     primaryClient.annotate.mockImplementation(({ segments }) => responseFor(segments, new Map([
       [segments[0].text, [{
         quote: 'opaque',
         occurrence: 1,
         type: 'word',
-        explanationZh: '表示难以理解或不透明的。',
-        exampleEn: 'The configuration format can feel opaque at first.',
+        explanationZh: '表示不透明或难以理解。',
+        exampleEn: 'The internal format can seem opaque.',
       }]],
     ])));
 
     const result = await createService({
-      annotations: { includeIPA: true },
+      annotations: { includeIPA: true, ipaAccent: 'both' },
       ipaService,
-    }).annotateMarkdown('The opaque configuration becomes clearer with practice.\n');
+    }).annotateMarkdown('The opaque internal format becomes clearer with practice.\n');
 
-    expect(ipaService.lookup).toHaveBeenCalledWith('opaque');
-    expect(result).toContain('**opaque**（生词 · 美式 IPA /oʊˈpeɪk/）');
+    expect(result).toContain('生词 · 美式 IPA /oʊˈpeɪk/');
+    expect(result).not.toContain('英式 IPA');
   });
 
   it('treats a complete empty response as valid and does not call the fallback', async () => {

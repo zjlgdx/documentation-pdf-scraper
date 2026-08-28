@@ -42,6 +42,7 @@ export class AnnotationService {
     this.density = this.annotationConfig.density || 'standard';
     this.explanationLanguage = this.annotationConfig.explanationLanguage || 'Simplified Chinese';
     this.includeIPA = this.annotationConfig.includeIPA ?? false;
+    this.ipaAccent = this.annotationConfig.ipaAccent || 'uk';
     this.maxAnnotations = ANNOTATION_DENSITY_LIMITS[this.density] || 2;
     this.logger = options.logger || createLogger('AnnotationService');
     this.cacheDir = options.cacheDir
@@ -66,6 +67,7 @@ export class AnnotationService {
     });
     this.ipaService = options.ipaService || new IpaPronunciationService({
       enabled: this.includeIPA,
+      accent: this.ipaAccent === 'both' ? 'uk' : this.ipaAccent,
       cacheDir: path.join(this.cacheDir, 'ipa'),
       logger: this.logger,
     });
@@ -108,20 +110,24 @@ export class AnnotationService {
 
   async _enrichResultsWithIpa(results) {
     if (!this.includeIPA) return;
+    const accents = this.ipaAccent === 'both' ? ['uk', 'us'] : [this.ipaAccent];
     const words = new Set();
     for (const annotations of results.values()) {
       for (const annotation of annotations) {
         if (annotation.type === 'word') words.add(annotation.quote);
       }
     }
-    const pronunciations = new Map(await Promise.all([...words].map(async (word) => [
-      word,
-      await this.ipaService.lookup(word),
-    ])));
+    const pronunciations = new Map(await Promise.all([...words].map(async (word) => {
+      const entries = await Promise.all(accents.map(async (accent) => [
+        accent,
+        await this.ipaService.lookup(word, accent),
+      ]));
+      return [word, Object.fromEntries(entries.filter(([, ipa]) => ipa))];
+    })));
     for (const [segmentId, annotations] of results) {
       results.set(segmentId, annotations.map((annotation) => {
         const ipa = annotation.type === 'word' ? pronunciations.get(annotation.quote) : null;
-        return ipa ? { ...annotation, ipa } : annotation;
+        return ipa && Object.keys(ipa).length > 0 ? { ...annotation, ipa } : annotation;
       }));
     }
   }
@@ -328,7 +334,7 @@ export class AnnotationService {
       `${prefix}>`,
     ];
     annotations.forEach((annotation) => {
-      const ipaLabel = annotation.ipa ? ` · 美式 IPA ${escapeMarkdown(annotation.ipa)}` : '';
+      const ipaLabel = formatIpaLabel(annotation.ipa);
       lines.push(
         `${prefix}> - **${escapeMarkdown(annotation.quote)}**（${TYPE_LABELS[annotation.type]}${ipaLabel}）：${escapeMarkdown(annotation.explanationZh)}`,
         `${prefix}>   *Example:* ${escapeMarkdown(annotation.exampleEn)}`
@@ -392,6 +398,14 @@ export class AnnotationService {
       await fs.rm(temporaryPath, { force: true }).catch(() => {});
     }
   }
+}
+
+function formatIpaLabel(pronunciations) {
+  if (!pronunciations) return '';
+  return ['uk', 'us']
+    .filter((accent) => pronunciations[accent])
+    .map((accent) => ` · ${accent === 'uk' ? '英式' : '美式'} IPA ${escapeMarkdown(pronunciations[accent])}`)
+    .join('');
 }
 
 function findFrontmatterEnd(markdown) {
