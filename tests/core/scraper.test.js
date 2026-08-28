@@ -130,6 +130,90 @@ describe('Scraper', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  describe('explicit Markdown workflow', () => {
+    beforeEach(() => {
+      mockPage.goto.mockResolvedValue({ status: () => 200 });
+      mockPage.evaluate.mockResolvedValue({ title: 'DOM guide', source: 'document.title' });
+      scraper.config.markdown = { enabled: true };
+      scraper.config.markdownPdf = { enabled: true, batchMode: true };
+      scraper.config.markdownSource = { enabled: true };
+      scraper.config.targetUrls = ['https://example.com/guide'];
+      scraper.config.translation = { enabled: false };
+      scraper.markdownService = {
+        normalizeResourceUrls: vi.fn((content) => content),
+        sanitizeMarkdown: vi.fn((content) => content),
+        addFrontmatter: vi.fn((content) => content),
+        extractAndConvertPage: vi.fn().mockResolvedValue('# DOM guide'),
+      };
+      scraper.markdownToPdfService = { convertContentToPdf: vi.fn() };
+      scraper.translationService = {
+        translateMarkdown: vi.fn().mockResolvedValue('# Translated guide'),
+      };
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+        new Response('# Source guide\n\nContent.', {
+          headers: { 'content-type': 'text/markdown' },
+        })
+      ));
+    });
+
+    it('fetches explicit Markdown without launching Chromium or touching DOM', async () => {
+      await scraper.initialize();
+      await scraper.collectUrls();
+      const result = await scraper.scrapePage('https://example.com/guide', 1);
+
+      expect(mockDependencies.browserPool.initialize).not.toHaveBeenCalled();
+      expect(mockDependencies.pageManager.createPage).not.toHaveBeenCalled();
+      expect(mockDependencies.imageService.setupImageObserver).not.toHaveBeenCalled();
+      expect(scraper.markdownService.extractAndConvertPage).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ title: 'Source guide', isBatchMode: true });
+      expect(mockDependencies.metadataService.saveArticleTitle).toHaveBeenCalledWith('1', 'Source guide');
+      expect(scraper.translationService.translateMarkdown).not.toHaveBeenCalled();
+      expect(mockDependencies.fileService.writeText).toHaveBeenCalledTimes(1);
+      expect(result.outputPath).toBe('pdfs/markdown/001-page.md');
+    });
+
+    it.each([
+      [503, 'text/markdown', 'Unavailable'],
+      [200, 'text/html', '<html>Challenge</html>'],
+      [200, 'text/markdown', ''],
+      [200, 'text/markdown', 'No heading'],
+    ])('rejects unusable Markdown (%s, %s) without a browser fallback', async (status, type, content) => {
+      fetch.mockResolvedValue(new Response(content, { status, headers: { 'content-type': type } }));
+
+      await expect(scraper.scrapePage('https://example.com/guide', 1)).rejects.toThrow();
+      expect(mockDependencies.pageManager.createPage).not.toHaveBeenCalled();
+      expect(mockDependencies.stateManager.markProcessed).not.toHaveBeenCalled();
+      expect(mockDependencies.stateManager.markFailed).toHaveBeenCalled();
+    });
+
+    it('keeps both artifacts only when translation is enabled', async () => {
+      scraper.config.translation.enabled = true;
+      const result = await scraper.scrapePage('https://example.com/guide', 1);
+      expect(scraper.translationService.translateMarkdown).toHaveBeenCalledTimes(1);
+      expect(mockDependencies.fileService.writeText).toHaveBeenCalledTimes(2);
+      expect(result.outputPath).toBe('pdfs/markdown/001-page_translated.md');
+    });
+
+    it('fails on Pandoc errors without switching renderers', async () => {
+      scraper.config.markdownPdf.batchMode = false;
+      scraper.markdownToPdfService.convertContentToPdf.mockRejectedValue(new Error('Pandoc failed'));
+      await expect(scraper.scrapePage('https://example.com/guide', 1)).rejects.toThrow();
+      expect(mockPage.pdf).not.toHaveBeenCalled();
+      expect(mockDependencies.stateManager.markProcessed).not.toHaveBeenCalled();
+    });
+
+    it('uses DOM extraction only when native Markdown is disabled', async () => {
+      scraper.config.markdownSource.enabled = false;
+      mockPage.goto.mockResolvedValue({ status: () => 200 });
+      mockPage.evaluate.mockResolvedValue({ title: 'DOM guide', source: 'document.title' });
+      await scraper.scrapePage('https://example.com/guide', 1);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(scraper.markdownService.extractAndConvertPage).toHaveBeenCalledWith(mockPage, '.content');
+    });
   });
 
   describe('constructor', () => {
@@ -164,7 +248,7 @@ describe('Scraper', () => {
     it('should initialize successfully', async () => {
       await scraper.initialize();
 
-      expect(mockDependencies.browserPool.initialize).toHaveBeenCalled();
+      expect(mockDependencies.browserPool.initialize).not.toHaveBeenCalled();
       expect(mockDependencies.stateManager.load).toHaveBeenCalled();
       expect(mockDependencies.queueManager.setConcurrency).toHaveBeenCalledWith(3);
       expect(mockDependencies.fileService.ensureDirectory).toHaveBeenCalledWith('./pdfs');
@@ -182,7 +266,7 @@ describe('Scraper', () => {
 
     it('should handle initialization errors', async () => {
       const error = new Error('Init failed');
-      mockDependencies.browserPool.initialize.mockRejectedValue(error);
+      mockDependencies.stateManager.load.mockRejectedValue(error);
 
       await expect(scraper.initialize()).rejects.toThrow(error);
       expect(mockDependencies.logger.error).toHaveBeenCalledWith(
@@ -200,13 +284,13 @@ describe('Scraper', () => {
     });
 
     it('should collect URLs successfully', async () => {
-      mockPage.evaluate.mockResolvedValue([
+      mockPage.evaluate.mockResolvedValueOnce([
         'https://example.com/page1',
         'https://example.com/page2',
         'https://example.com/page1', // duplicate
         '#anchor', // invalid
         'javascript:void(0)', // invalid
-      ]);
+      ]).mockResolvedValueOnce('Documentation');
 
       const urls = await scraper.collectUrls();
 
@@ -275,22 +359,14 @@ describe('Scraper', () => {
       const navError = new Error('Navigation failed');
       mockPage.goto.mockRejectedValue(navError);
 
-      const urls = await scraper.collectUrls();
-      expect(urls).toEqual([]);
-      expect(mockDependencies.logger.error).toHaveBeenCalledWith(
-        '入口URL收集失败，将跳过该入口',
-        expect.objectContaining({
-          entryUrl: 'https://example.com',
-          error: 'Navigation failed',
-        })
-      );
+      await expect(scraper.collectUrls()).rejects.toThrow('URL收集失败');
+      expect(mockDependencies.metadataService.saveSectionStructure).not.toHaveBeenCalled();
     }, 30000);
 
     it('should clean up resources on error', async () => {
       mockPage.evaluate.mockRejectedValue(new Error('Evaluation failed'));
 
-      const urls = await scraper.collectUrls();
-      expect(urls).toEqual([]);
+      await expect(scraper.collectUrls()).rejects.toThrow('URL收集失败');
       expect(mockDependencies.imageService.cleanupPage).toHaveBeenCalledWith(mockPage);
       expect(mockDependencies.pageManager.closePage).toHaveBeenCalledWith('url-collector');
     });
@@ -560,26 +636,20 @@ describe('Scraper', () => {
     });
   });
 
-  describe('navigateWithFallback', () => {
-    it('should try multiple navigation strategies', async () => {
-      mockPage.goto
-        .mockRejectedValueOnce(new Error('Navigation timeout'))
-        .mockResolvedValueOnce({ status: () => 200, statusText: () => 'OK' });
-
-      const result = await scraper.navigateWithFallback(mockPage, 'https://example.com');
-
-      expect(result.success).toBe(true);
-      expect(result.strategy).toBe('networkidle2');
-      expect(mockPage.goto).toHaveBeenCalledTimes(2);
+  describe('navigatePage', () => {
+    it('uses exactly the configured navigation strategy', async () => {
+      scraper.config.navigationStrategy = 'load';
+      mockPage.goto.mockResolvedValue({ status: () => 200 });
+      await scraper.navigatePage(mockPage, 'https://example.com');
+      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com', {
+        waitUntil: 'load', timeout: 30000,
+      });
     });
 
-    it('should handle all strategies failing', async () => {
+    it('reports navigation failure without switching strategies', async () => {
       mockPage.goto.mockRejectedValue(new Error('Navigation timeout'));
-
-      const result = await scraper.navigateWithFallback(mockPage, 'https://example.com');
-
-      expect(result.success).toBe(false);
-      expect(mockPage.goto).toHaveBeenCalledTimes(4);
+      await expect(scraper.navigatePage(mockPage, 'https://example.com')).rejects.toThrow('Navigation timeout');
+      expect(mockPage.goto).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -806,10 +876,10 @@ describe('Scraper', () => {
       mockPage.goto.mockResolvedValue({ status: () => 200 });
       mockPage.waitForSelector.mockResolvedValue();
 
-      // Mock multiple evaluate calls: section title + URLs collection
+      // Discover links after navigation, then read the loaded page's section title.
       mockPage.evaluate
-        .mockResolvedValueOnce('Section Title') // _extractSectionTitle
-        .mockResolvedValueOnce(['https://example.com/page1']); // _collectUrlsFromEntryPoint
+        .mockResolvedValueOnce(['https://example.com/page1'])
+        .mockResolvedValueOnce('Section Title');
 
       const listener = vi.fn();
       scraper.on('urlsCollected', listener);
@@ -937,18 +1007,13 @@ describe('Scraper', () => {
       );
     });
 
-    it('should warn when title extraction fails', async () => {
+    it('rejects missing titles instead of using a filename in the TOC', async () => {
       mockPage.evaluate.mockResolvedValue({
         title: '',
         source: 'none',
       });
 
-      await scraper.scrapePage('https://example.com/page', 0);
-
-      expect(mockDependencies.logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('标题提取失败'),
-        expect.any(Object)
-      );
+      await expect(scraper.scrapePage('https://example.com/page', 0)).rejects.toThrow();
       expect(mockDependencies.metadataService.saveArticleTitle).not.toHaveBeenCalled();
     });
   });

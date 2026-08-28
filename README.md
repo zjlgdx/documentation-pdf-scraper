@@ -45,8 +45,11 @@ make install
 - Node.js >= 18.18.0
 - Python >= 3.10 (for PDF processing)
 - uv (Python package/environment manager)
-- Pandoc
+- Current Pandoc
+- Poppler (`brew install poppler`) for PDF verification previews
 - A LaTeX engine that provides `xelatex`
+- DejaVu fonts (`brew install --cask font-dejavu`) and Noto Sans CJK SC
+  for code and Chinese text. A small licensed symbol font is bundled under `assets/fonts`.
 - Cairo (`brew install cairo`) for SVG diagrams in generated PDFs
 
 ## Usage
@@ -63,18 +66,40 @@ npm run docs:openai
 make clean && make run
 ```
 
-### Mode 2: Batch Markdown PDF
+### Source and rendering modes
 
-Generate a PDF directly from a folder of Markdown files (bypassing the scraper).
+`make run` always collects the selected target first. `markdownPdf.batchMode=true`
+means one final Pandoc PDF is built after collection; it does not skip scraping.
 
-1. Place your `.md` files in `pdfs/markdown` (or configure `markdownPdf.sourceDir`).
-2. Ensure `config.json` has `markdownPdf: { "batchMode": true }`.
-3. Run:
+- `markdownSource.enabled=true`: fetch the official source directly. Explicit URL
+  lists need no Chromium; navigation discovery may still use a browser.
+- `markdownSource.enabled=false`: extract content from the browser DOM.
+- `markdownSource.format`: `markdown` or `mdx`, selected to match the source grammar.
+- `markdown.enabled=true` and `markdownPdf.enabled=true`: use Pandoc/XeLaTeX.
+  With both disabled, use Puppeteer printing and Python merging.
+
+Source, parser, translation, image conversion and renderer errors are reported;
+the workflow never switches to another source or PDF engine. A failed page stops
+final PDF generation after configured retries. With translation disabled, only
+one Markdown file is written; translated output is selected only when enabled.
+
+### PDF verification
+
+Every `make run` checks the final PDF and writes `qa/<PDF name>/report.json` plus
+Poppler page previews beside the PDF. Missing titles/glyphs, overflow, invalid
+bookmarks and mismatched printed TOC numbers fail the command. Review the PNGs
+for spacing, hierarchy, overlap and legibility; automated checks cannot certify
+visual quality.
 
 ```bash
-# Run in batch mode
-make run
+make pdf-smoke                         # Fixed local layout fixture, no website
+make verify-pdf PDF=path/to/file.pdf   # Recheck using the current profile
 ```
+
+The CI `PDF Layout Smoke` job generates the fixture and uploads its PDF, report
+and previews. The repository skill at
+[documentation-pdf-workflow](.agents/skills/documentation-pdf-workflow/SKILL.md)
+describes the evidence and review order for agent-assisted work.
 
 ### device Optimization (Kindle)
 
@@ -95,14 +120,11 @@ The core configuration file. `docTarget` determines which target-specific config
 
 ```json
 {
-  "docTarget": "openai",        // Active documentation target
-  "pdfDir": "pdfs",             // Output directory
-  "concurrency": 5,             // Scraping concurrency
-  "markdownPdf": {
-    "enabled": true,
-    "batchMode": false,         // Set true to skip scraping and use local MD files
-    "outputDir": "markdown"     // Directory for intermediate/source MD files
-  }
+  "docTarget": "claude-code-curated",
+  "pdfDir": "pdfs",
+  "concurrency": 5,
+  "markdown": { "enabled": true, "outputDir": "markdown" },
+  "markdownPdf": { "enabled": true, "batchMode": true }
 }
 ```
 
@@ -110,13 +132,16 @@ The core configuration file. `docTarget` determines which target-specific config
 
 Target-specific configurations (URLs, selectors, etc.) are stored in `doc-targets/`.
 
-**Example (`doc-targets/openai.json`):**
+**Example (official MDX source with an explicit selection):**
 ```json
 {
-  "rootURL": "https://platform.openai.com/docs",
-  "matchPatterns": ["https://platform.openai.com/docs/**"],
-  "contentSelector": ".docs-body",
-  "navLinksSelector": ".docs-nav a"
+  "rootURL": "https://code.claude.com/docs/en/overview",
+  "baseUrl": "https://code.claude.com/docs/en/",
+  "allowedDomains": ["code.claude.com"],
+  "contentSelector": "#content-area",
+  "navLinksSelector": "nav a",
+  "targetUrls": ["https://code.claude.com/docs/en/overview"],
+  "markdownSource": { "enabled": true, "format": "mdx", "urlSuffix": ".md" }
 }
 ```
 
@@ -143,10 +168,10 @@ to keep the document structure reproducible without manual metadata edits.
 
 The project uses a **Dependency Injection (DI)** container for modularity:
 
-- **Core**: `Application`, `PythonRunner`
+- **Core**: `Application`, shared `ProcessRunner`
 - **Services**:
-    - `Scraper`: Puppeteer-based crawler.
-    - `MarkdownToPdfService`: Handles Markdown -> PDF conversion via Pandoc/LaTeX.
+    - `Scraper`: explicit Markdown or DOM acquisition, ordering and resume state.
+    - `PandocPdfService`: rendering and batch assembly; content normalization and LaTeX typography live in `src/services/pdf/`.
     - `PythonMergeService`: Merges multiple PDFs using PyMuPDF.
 
 ## Development

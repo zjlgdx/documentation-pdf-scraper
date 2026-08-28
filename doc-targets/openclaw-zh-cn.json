@@ -30,7 +30,8 @@
   "navigationStrategy": "domcontentloaded",
   "markdownSource": {
     "enabled": true,
-    "urlSuffix": ".md"
+    "urlSuffix": ".md",
+    "format": "mdx"
   },
   "targetUrls": [
     "https://docs.openclaw.ai/zh-CN/AGENTS",

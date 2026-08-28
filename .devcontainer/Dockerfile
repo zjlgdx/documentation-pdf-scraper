@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
   fontconfig \
   fonts-liberation \
+  fonts-dejavu-core \
   fonts-noto-cjk \
   fonts-noto-core \
   fonts-noto-mono \
@@ -52,6 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   lmodern \
   make \
   pandoc \
+  poppler-utils \
   python3 \
   python3-pip \
   python3-venv \

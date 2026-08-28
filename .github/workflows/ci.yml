@@ -51,3 +51,36 @@ jobs:
       - name: Format Check (advisory)
         run: npm run format:check
         continue-on-error: true
+
+  pdf-layout:
+    name: PDF Layout Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.10"
+      - name: Install PDF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y texlive-xetex texlive-latex-extra texlive-lang-chinese fonts-noto-cjk fonts-dejavu-core fonts-lmodern libcairo2 poppler-utils
+      - uses: pandoc/actions/setup@v1.1.1
+      - name: Install dependencies
+        run: |
+          npm ci
+          uv sync --locked
+      - name: Generate and verify fixed PDF fixture
+        run: make pdf-smoke
+      - name: Upload PDF and review previews
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pdf-layout-review
+          path: output/pdf-smoke/
+          retention-days: 14

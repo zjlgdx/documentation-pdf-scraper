@@ -64,8 +64,9 @@ config-profiles/              # Kindle device profiles
 - Never duplicate data across services
 
 **PDF Generation Flow:**
-1. Puppeteer generates individual PDFs
-2. PyMuPDF merges with bookmarks using `articleTitles.json`
+1. Acquire native Markdown/MDX or browser DOM according to the target configuration.
+2. Pandoc/XeLaTeX creates the batch PDF (default); explicit per-page modes use Python merging.
+3. Verify the final PDF and render previews before reporting success. Review previews for visual quality.
 
 ## Build, Test, and Development Commands
 
@@ -226,16 +227,23 @@ npx vitest run tests/services/fileService.test.js
   - Must be defined in `src/config/configValidator.js` FIRST
 
 **Navigation Strategy:**
-- `navigationStrategy` - Page load strategy (default: `auto`)
-  - `auto` - Try strategies in order: `domcontentloaded` → `networkidle2` → `networkidle0` → `load`
-  - `domcontentloaded` - Best for SSR/static sites (fastest)
-  - `load` - Best for Next.js/React SPAs (avoid timeout retries)
-  - `networkidle2` - Fallback for moderate background requests
-  - `networkidle0` - Avoid (fails with analytics/websockets)
+- `navigationStrategy` chooses exactly one Puppeteer wait condition: `domcontentloaded`
+  (default), `load`, `networkidle2`, or `networkidle0`. Navigation failures do not switch strategies.
 
-**Markdown Source (optional):**
-- `markdownSource.enabled` - When true, try fetching `url + urlSuffix` as raw markdown before falling back to DOM → Markdown.
-- `markdownSource.urlSuffix` - Suffix appended to page URL (default: `.md`).
+**Markdown Source:**
+- `markdownSource.enabled=true` requires a valid native Markdown response; it never falls back to DOM.
+- `markdownSource.format` is `markdown` (default) or `mdx`. Match the actual source grammar.
+- `markdownSource.urlSuffix` is appended to the URL pathname (default `.md`).
+- Native source mode requires both `markdown.enabled` and `markdownPdf.enabled`.
+- Explicit `targetUrls`/`targetSections` plus native source do not start Chromium.
+
+**PDF verification:**
+- `make pdf-smoke` generates a fixed local fixture and checks layout/TOC invariants.
+- `make verify-pdf PDF=...` validates and renders an existing PDF with the current profile.
+- `make run` verifies its final output automatically. Inspect the emitted PNG previews;
+  an automated pass is not a completed visual review.
+- The project skill `.agents/skills/documentation-pdf-workflow/SKILL.md` describes
+  the investigation and acceptance sequence without replacing these rules.
 
 ### Configuration Validation Workflow
 
@@ -288,7 +296,7 @@ npx vitest run tests/services/fileService.test.js
      "contentSelector": "main, article",
      "allowedDomains": ["example.com"],
      "enablePDFStyleProcessing": false,
-     "navigationStrategy": "auto"
+     "navigationStrategy": "domcontentloaded"
    }
    ```
 
@@ -396,7 +404,7 @@ node scripts/use-kindle-config.js current
   - Long lines without breaks.
   - Indentation in Markdown (Pandoc treats indented blocks inside HTML as code).
 - **Fixes**:
-  - **Overflow**: `src/services/pandocPdfService.js` uses `xurl` and disables `breakanywhere` inside critical tags if needed.
+  - **Overflow**: `src/services/pdf/pandocTemplate.js` uses `xurl` and disables `breakanywhere` inside critical tags if needed.
   - **Plain fenced code blocks**: Pandoc may emit unlabeled fenced blocks as LaTeX `verbatim`, not `Highlighting`. If long code still overflows after tuning `Highlighting`, also recustomize lowercase `verbatim` in the injected header.
   - **Tables**: Ensure empty lines before/after tables.
   - **Indentation**: Remove indentation for `<table>` or custom components inside HTML wrappers to prevent "code block" rendering.

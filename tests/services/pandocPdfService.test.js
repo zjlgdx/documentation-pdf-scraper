@@ -2,13 +2,10 @@ import { describe, it, test, expect, beforeAll, beforeEach, afterAll, afterEach,
 
 // tests/services/pandocPdfService.test.js
 import { PandocPdfService } from '../../src/services/pandocPdfService.js';
-import { spawn } from 'child_process';
+import { pandocHeader } from '../../src/services/pdf/pandocTemplate.js';
 import fs from 'fs';
 import path from 'path';
 
-vi.mock('child_process', () => ({
-  spawn: vi.fn(),
-}));
 
 describe('PandocPdfService', () => {
   let service;
@@ -30,6 +27,7 @@ describe('PandocPdfService', () => {
 
     service = new PandocPdfService({
       logger: mockLogger,
+      processRunner: { run: vi.fn(), dispose: vi.fn() },
       config: {
         markdownPdf: {
           highlightStyle: 'github',
@@ -62,6 +60,29 @@ describe('PandocPdfService', () => {
       });
       expect(customService.pandocBinary).toBe('/custom/path/pandoc');
     });
+  });
+
+  it('fails on malformed MDX and never retries with regex stripping', async () => {
+    service.normalizer.config.markdownSource = { format: 'mdx' };
+    await expect(service.convertContentToPdf('# Guide\n\n<Tabs><Tab>unfinished', 'unused.pdf'))
+      .rejects.toThrow('MDX');
+    expect(service.processRunner.run).not.toHaveBeenCalled();
+  });
+
+  it('rejects metadata read errors before rendering a flattened book', async () => {
+    fs.writeFileSync(path.join(tempDir, '000-guide.md'), '# Guide');
+    service.metadataService = { getSectionStructure: vi.fn().mockRejectedValue(new Error('bad metadata')) };
+    await expect(service.generateBatchPdf(tempDir, 'unused.pdf')).rejects.toThrow('bad metadata');
+    expect(service.processRunner.run).not.toHaveBeenCalled();
+  });
+
+  it('selects translated artifacts only when enabled and requires all of them', () => {
+    fs.writeFileSync(path.join(tempDir, '000-guide.md'), '# Guide');
+    fs.writeFileSync(path.join(tempDir, '000-guide_translated.md'), '# Translated guide');
+    fs.writeFileSync(path.join(tempDir, '001-reference.md'), '# Reference');
+    expect(service._getMarkdownFiles(tempDir)).toEqual(['000-guide.md', '001-reference.md']);
+    service.config.translation = { enabled: true };
+    expect(() => service._getMarkdownFiles(tempDir)).toThrow('Missing translated Markdown: 001-reference_translated.md');
   });
 
   describe('_buildPandocArgs', () => {
@@ -147,7 +168,7 @@ describe('PandocPdfService', () => {
     });
 
     it('should configure both Highlighting and plain verbatim blocks to wrap long lines', () => {
-      const header = service._getPandocHeaderContent();
+      const header = pandocHeader;
 
       expect(header).toContain(
         '\\RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines,breakanywhere,fontsize=\\small}'
@@ -158,7 +179,7 @@ describe('PandocPdfService', () => {
     });
 
     it('should apply publication-quality TOC typography and spacing', () => {
-      const header = service._getPandocHeaderContent();
+      const header = pandocHeader;
 
       expect(header).toContain('\\usepackage{tocloft}');
       expect(header).toContain('\\setlength{\\cftsubsecindent}{1.5em}');
@@ -216,6 +237,18 @@ describe('PandocPdfService', () => {
   });
 
   describe('_concatenateMarkdownFiles', () => {
+    it.each(['missing title', 'missing file', 'unmapped file'])('rejects incomplete section metadata: %s', (failure) => {
+      const files = ['000-guide.md'];
+      const titles = failure === 'missing title' ? {} : { 0: 'Guide' };
+      fs.writeFileSync(path.join(tempDir, files[0]), '# Guide');
+      const pages = [{ index: failure === 'missing file' ? '2' : '0' }];
+      if (failure === 'unmapped file') {
+        files.push('001-extra.md');
+        fs.writeFileSync(path.join(tempDir, files[1]), '# Extra');
+      }
+      expect(() => service._concatenateMarkdownFiles(tempDir, files,
+        { sections: [{ title: 'Section', pages }] }, titles)).toThrow();
+    });
     it('keeps a section heading with its first article instead of creating a title-only page', () => {
       fs.writeFileSync(path.join(tempDir, '000-first.md'), '# First\n\nFirst body.');
       fs.writeFileSync(path.join(tempDir, '001-second.md'), '# Second\n\nSecond body.');
@@ -240,6 +273,7 @@ describe('PandocPdfService', () => {
     });
 
     it('builds a readable three-level TOC hierarchy from indexed MDX pages', () => {
+      service.config.markdownSource = { format: 'mdx' };
       fs.writeFileSync(
         path.join(tempDir, '000-first.md'),
         [
@@ -281,6 +315,7 @@ describe('PandocPdfService', () => {
     });
 
     it('keeps MDX steps below the article main sections in the TOC hierarchy', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const content = [
         '# First',
         '',
@@ -293,7 +328,7 @@ describe('PandocPdfService', () => {
         '</Steps>',
       ].join('\n');
 
-      const result = service._prepareArticleContentForBatch(content, 'First');
+      const result = service.normalizer._prepareArticleContentForBatch(content, 'First');
 
       expect(result).toContain('### Workflow');
       expect(result).toContain('#### Explore');
@@ -312,10 +347,7 @@ describe('PandocPdfService', () => {
       await service.convertContentToPdf(content, outputPath);
 
       expect(service._runPandoc).toHaveBeenCalled();
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        expect.stringContaining('开始使用 Pandoc'),
-        expect.any(Object)
-      );
+      expect(fs.existsSync(service._runPandoc.mock.calls[0][0])).toBe(false);
     });
 
     it('should cleanup temp file after conversion', async () => {
@@ -344,7 +376,7 @@ describe('PandocPdfService', () => {
         'Pandoc error'
       );
 
-      expect(mockLogger.error).toHaveBeenCalled();
+      expect(fs.existsSync(service._runPandoc.mock.calls[0][0])).toBe(false);
     });
   });
 
@@ -360,7 +392,7 @@ describe('PandocPdfService', () => {
       await service.convertToPdf(inputPath, outputPath);
 
       expect(service._runPandoc).toHaveBeenCalledWith(
-        expect.stringContaining('.temp/temp_'),
+        expect.stringContaining('.temp/render-'),
         outputPath,
         expect.any(Object)
       );
@@ -385,20 +417,20 @@ describe('PandocPdfService', () => {
     it('should remove theme={null} from standard code blocks', () => {
       const input = '```markdown theme={null}\ncontent\n```';
       const expected = '```markdown\ncontent\n```';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).toBe(expected);
     });
 
     it('should remove theme={null} from code blocks with 4 backticks', () => {
       const input = '````markdown theme={null}\ncontent\n````';
       const expected = '````markdown\ncontent\n````';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).toBe(expected);
     });
 
     it('should normalize fenced code attributes inside list items', () => {
       const input = '* Run:\n\n  ```bash theme={null}\n  echo hello\n  ```';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('  ```bash\n  echo hello\n  ```');
       expect(result).not.toContain('theme={null}');
@@ -407,13 +439,14 @@ describe('PandocPdfService', () => {
     it('should remove generic props from code blocks with 4 backticks', () => {
       const input = '````javascript filename="test.js"\ncontent\n````';
       const expected = '````javascript\ncontent\n````';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).toBe(expected);
     });
 
     it('should convert Info component with list items to fully-quoted blockquote', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input = '<Info>\n- Step 1\n- Step 2\n</Info>';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).toContain('> **Note:**\n>\n> \\nopagebreak[4]\n>\n> - Step 1');
       expect(result).toContain('> - Step 2');
       // No unquoted list items
@@ -421,14 +454,16 @@ describe('PandocPdfService', () => {
     });
 
     it('should convert Tip component with multiline content to blockquote', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input = '<Tip>\nDo this first.\n- Option A\n- Option B\n</Tip>';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).toContain('> **Tip:**\n>\n> \\nopagebreak[4]\n>\n> Do this first.');
       expect(result).toContain('> - Option A');
       expect(result).toContain('> - Option B');
     });
 
     it('should preserve paragraph and fenced-code boundaries inside Tip components', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input = [
         '<Tip>',
         '  Use `jq` to extract the result:',
@@ -439,7 +474,7 @@ describe('PandocPdfService', () => {
         '</Tip>',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('> **Tip:**');
       expect(result).toContain('>\n> Use `jq` to extract the result:');
@@ -449,6 +484,7 @@ describe('PandocPdfService', () => {
     });
 
     it('should preserve code indentation while removing MDX wrapper indentation', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input = [
         '<Tip>',
         '  Example:',
@@ -465,7 +501,7 @@ describe('PandocPdfService', () => {
         '```',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('> def greet():\n>     return "hello"');
       expect(result).toContain('def other():\n    return True');
@@ -487,7 +523,7 @@ describe('PandocPdfService', () => {
         '```',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toMatch(/^```\nclaude -p/m);
       expect(result).toContain('```bash\necho short\n```');
@@ -501,7 +537,7 @@ describe('PandocPdfService', () => {
         '| `shell` | No | Shell for `` !`command` `` and ` ```! ` blocks. |',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).not.toContain('| Field | Required | Description |');
       expect(result).toContain('**Field:** `name`');
@@ -514,10 +550,11 @@ describe('PandocPdfService', () => {
     });
 
     it('should keep callout labels with their content without changing code examples', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const example = '```md\n> **Note:**\n>\n> Example note.\n```';
       const input = '<Note>\nRead this before continuing.\n</Note>\n\n' + example;
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('> **Note:**\n>\n> \\nopagebreak[4]\n>\n> Read this before continuing.');
       expect(result).not.toContain('\\Needspace');
@@ -527,7 +564,7 @@ describe('PandocPdfService', () => {
     it('should match complete backtick runs without swallowing surrounding prose', () => {
       const input = 'Shell for `` !`command` `` and ` ```! ` blocks. Accepts `bash` or `powershell`. See [PowerShell tool](https://example.com/tools-reference#powershell-tool).';
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toBe(input);
       expect(result).not.toContain('\\texttt{');
@@ -542,37 +579,39 @@ describe('PandocPdfService', () => {
         '```',
       ].join('\n');
 
-      expect(service._formatFieldReferenceTablesForPdf(input)).toBe(input);
+      expect(service.normalizer._formatFieldReferenceTablesForPdf(input)).toBe(input);
     });
 
     it('should keep only the visible light-theme SVG from a theme pair', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input = [
         '<img src="https://example.com/loop.svg" className="dark:hidden" alt="Loop" />',
         '',
         '<img src="https://example.com/loop-dark.svg" className="hidden dark:block" alt="Loop" />',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('https://example.com/loop.svg');
       expect(result).not.toContain('https://example.com/loop-dark.svg');
     });
 
     it('should convert Warning component to blockquote', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input = '<Warning>\nDanger ahead!\n</Warning>';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).toContain('> **Warning:**\n>\n> \\nopagebreak[4]\n>\n> Danger ahead!');
     });
 
     it('should remove empty list items inside blockquotes', () => {
       const input = '> -\n> text after';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).not.toMatch(/^>\s*-\s*$/m);
     });
 
     it('should insert blank line between blockquote prose and list', () => {
       const input = '> Some text\n> - item 1';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).toBe('> Some text\n>\n> - item 1');
     });
 
@@ -588,7 +627,7 @@ describe('PandocPdfService', () => {
         'After.',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('| Key | Type / Values | Details |');
       expect(result).toContain(
@@ -612,7 +651,7 @@ describe('PandocPdfService', () => {
         '| `responses_api_engine_service_tbt.duration_ms` | histogram |   | Responses API engine service time-between-token timing. |',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('| Metric | Type | Fields | Description |');
       expect(result).toContain(
@@ -627,7 +666,7 @@ describe('PandocPdfService', () => {
     });
 
     it('should add break opportunities to long camelCase inline configuration keys', () => {
-      const result = service._cleanMarkdownContent(
+      const result = service.normalizer._cleanMarkdownContent(
         'Require approval with `isolatePeerMachines` before sending.'
       );
 
@@ -644,7 +683,7 @@ describe('PandocPdfService', () => {
         '| Dangerous full access | `--dangerously-bypass-approvals-and-sandbox` (alias: `--yolo`) | [Elevated Risk](https://help.openai.com/articles/20001061)No sandbox; no approvals *(not recommended)* |',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('| Intent | Flags | Effect |');
       expect(result).toContain(
@@ -677,7 +716,7 @@ describe('PandocPdfService', () => {
         'After.',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('| Key | Type / Values | Details |');
       expect(result).toContain('Table details.');
@@ -700,7 +739,7 @@ describe('PandocPdfService', () => {
         'Only card details.',
       ].join('\n');
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain('**Key:** \\texttt{standalone.\\allowbreak{}key}');
       expect(result).toContain('**Type / Values:** string');
@@ -711,7 +750,7 @@ describe('PandocPdfService', () => {
       const input =
         'Use `$REPO_ROOT/.agents/plugins/marketplace.json` for a repo-scoped list and keep `plugins[]` unchanged.';
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain(
         '\\texttt{\\$REPO\\_\\allowbreak{}ROOT/\\allowbreak{}.\\allowbreak{}agents/\\allowbreak{}plugins/\\allowbreak{}marketplace.\\allowbreak{}json}'
@@ -723,7 +762,7 @@ describe('PandocPdfService', () => {
       const input =
         'Use `$REPO_ROOT/.agents/plugins/marketplace.json`, then add a `./`\\-prefixed path relative to the marketplace root and set `interface.displayName`.';
 
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain(
         '\\texttt{\\$REPO\\_\\allowbreak{}ROOT/\\allowbreak{}.\\allowbreak{}agents/\\allowbreak{}plugins/\\allowbreak{}marketplace.\\allowbreak{}json}'
@@ -734,6 +773,7 @@ describe('PandocPdfService', () => {
     });
 
     it('should strip multi-line MDX export const declarations', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input = [
         '# Quickstart',
         '',
@@ -745,7 +785,7 @@ describe('PandocPdfService', () => {
         '## Step 1',
         'Real content.',
       ].join('\n');
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).not.toContain('export const InstallConfigurator');
       expect(result).not.toContain('const TERM');
       expect(result).toContain('# Quickstart');
@@ -754,6 +794,7 @@ describe('PandocPdfService', () => {
     });
 
     it('should strip MDX export that uses template literals with backticks', () => {
+      service.config.markdownSource = { format: 'mdx' };
       // Reproduces the quickstart.md Experiment helper shape that triggered
       // the CI LaTeX error: backtick template literals confused pandoc into
       // opening math mode inside escaped prose.
@@ -769,7 +810,7 @@ describe('PandocPdfService', () => {
         '',
         'suffix text',
       ].join('\n');
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).not.toContain('export const Experiment');
       expect(result).not.toContain('document.cookie');
       expect(result).toContain('prefix text');
@@ -777,6 +818,7 @@ describe('PandocPdfService', () => {
     });
 
     it('should strip JSX tag whose attribute value is a nested JSX element', () => {
+      service.config.markdownSource = { format: 'mdx' };
       // Regression: `<Experiment treatment={<InstallConfigurator />} />`
       // A naive `<[A-Z]...[^>]*>` stops at the inner `/>` and leaves
       // `} />` behind as prose. The brace-aware scanner must drop the
@@ -788,7 +830,7 @@ describe('PandocPdfService', () => {
         '',
         'after',
       ].join('\n');
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).not.toContain('Experiment');
       expect(result).not.toContain('InstallConfigurator');
       expect(result).not.toContain('} />');
@@ -798,9 +840,10 @@ describe('PandocPdfService', () => {
     });
 
     it('should strip JSX tag with multiple nested JSX attribute values', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input =
         '<Card icon={<Icon name="book" />} action={<Button label="Go" />}>Content</Card>';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).not.toContain('<Card');
       expect(result).not.toContain('</Card');
       expect(result).not.toContain('<Icon');
@@ -809,6 +852,7 @@ describe('PandocPdfService', () => {
     });
 
     it('should strip MDX export containing embedded CSS template literal', () => {
+      service.config.markdownSource = { format: 'mdx' };
       // Regression: CSS inside a JS template literal has bare `}` at column 0
       // (end of each CSS rule). Earlier regex stopped at the first such `}`
       // and left the rest of the CSS leaking into the PDF. The real closer is
@@ -835,7 +879,7 @@ describe('PandocPdfService', () => {
         '## Step 1',
         'Body.',
       ].join('\n');
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).not.toContain('cc-ic');
       expect(result).not.toContain('--ic-slate');
       expect(result).not.toContain('inline-flex');
@@ -846,6 +890,7 @@ describe('PandocPdfService', () => {
     });
 
     it('should strip multiple consecutive MDX export blocks', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input = [
         'export const A = () => {',
         '  return 1;',
@@ -857,7 +902,7 @@ describe('PandocPdfService', () => {
         '',
         '# Real title',
       ].join('\n');
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).not.toContain('export const A');
       expect(result).not.toContain('export const B');
       expect(result).toContain('# Real title');
@@ -865,30 +910,31 @@ describe('PandocPdfService', () => {
 
     it('should preserve and constrain webp markdown images for the conversion stage', () => {
       const input = '![App screenshot](https://developers.openai.com/images/app.webp)';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toBe('![App screenshot](https://developers.openai.com/images/app.webp){width=100%}');
     });
 
-    it('should keep and constrain images when fm=webp is rewritten to a safe output format', () => {
+    it('preserves image URL parameters and literal code for byte-based image conversion', () => {
       const input =
         '![Chart](https://cdn.example.com/chart.webp?fm=webp&fit=max)';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
-      expect(result).toBe('![Chart](https://cdn.example.com/chart.webp?fm=png&fit=max){width=100%}');
+      expect(result).toBe('![Chart](https://cdn.example.com/chart.webp?fm=webp&fit=max){width=100%}');
+      expect(service.normalizer._cleanMarkdownContent('`format=fm=webp`')).toBe('`format=fm=webp`');
     });
 
     it('should preserve raw html img tags that point to webp assets for conversion', () => {
       const input =
         '<img src="https://developers.openai.com/images/app.webp" alt="App screenshot">';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toBe('<img src="https://developers.openai.com/images/app.webp" alt="App screenshot">');
     });
 
     it('should constrain standalone icon images to their website display size', () => {
       const input = '![](https://developers.openai.com/images/codex/codex-banner-icon.webp)';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toBe(
         '![](https://developers.openai.com/images/codex/codex-banner-icon.webp){width=40px}'
@@ -903,7 +949,7 @@ describe('PandocPdfService', () => {
         '',
         'Now you can give Codex access to the internet during task execution.',
       ].join('\n');
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toContain(
         '![](https://developers.openai.com/images/codex/changelog/internet_access.png){width=100%}'
@@ -912,7 +958,7 @@ describe('PandocPdfService', () => {
 
     it('should not override existing image sizing attributes', () => {
       const input = '![](https://developers.openai.com/images/codex/changelog/internet_access.png){width=60%}';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toBe(
         '![](https://developers.openai.com/images/codex/changelog/internet_access.png){width=60%}'
@@ -927,7 +973,7 @@ describe('PandocPdfService', () => {
         '',
         'Work across projects in the native Windows app.',
       ].join('\n');
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
 
       expect(result).toBe(
         [
@@ -955,13 +1001,14 @@ describe('PandocPdfService', () => {
         'claude',
         '```',
       ].join('\n');
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).toContain('import json');
       expect(result).toContain('import sys');
       expect(result).toContain('export MAX_TOKENS=50000');
     });
 
     it('should strip top-level MDX import statements', () => {
+      service.config.markdownSource = { format: 'mdx' };
       const input = [
         "import Foo from '@site/components/Foo';",
         'import Bar from "./Bar";',
@@ -969,7 +1016,7 @@ describe('PandocPdfService', () => {
         '# Page title',
         'body',
       ].join('\n');
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).not.toMatch(/^import\s/m);
       expect(result).toContain('# Page title');
       expect(result).toContain('body');
@@ -979,12 +1026,13 @@ describe('PandocPdfService', () => {
       const input =
         '````markdown theme={null}\n' + '```bash\n' + 'echo "hello"\n' + '```\n' + '````';
       const expected = '````markdown\n' + '```bash\n' + 'echo "hello"\n' + '```\n' + '````';
-      const result = service._cleanMarkdownContent(input);
+      const result = service.normalizer._cleanMarkdownContent(input);
       expect(result).toBe(expected);
     });
 
-    it('should preserve nested code fences when outer uses more backticks (regex fallback)', () => {
-      // Regression: the regex fence splitter must match closing delimiter to
+    it('should preserve nested code fences when outer uses more backticks (MDX AST)', () => {
+      service.config.markdownSource = { format: 'mdx' };
+      // Regression: fenced examples must match closing delimiter to
       // the opener's character AND length. A 3-backtick line inside a
       // 4-backtick block must NOT end the protected region.
       const input = [
@@ -997,7 +1045,7 @@ describe('PandocPdfService', () => {
         '',
         "import Leak from './leak';",
       ].join('\n');
-      const result = service._stripMdxModuleDeclarations(input);
+      const result = service.normalizer._stripMdxWithAst(input);
       // The export inside the 4-backtick block must survive
       expect(result).toContain('export const SHOULD_SURVIVE = true;');
       expect(result).toContain('export VAR=1');
@@ -1047,16 +1095,10 @@ describe('PandocPdfService', () => {
       expect(result.content).toBe('![](/tmp/converted/icon.png){width=40px}');
     });
 
-    it('should downgrade unsafe markdown images to plain links when conversion fails', async () => {
-      vi.spyOn(service, '_materializePdfSafeImage').mockRejectedValue(new Error('boom'));
-
-      const result = await service._preparePdfImages(
-        '![App screenshot](https://developers.openai.com/images/app.webp)',
-        tempDir
-      );
-
-      expect(result.content).toBe('[App screenshot](https://developers.openai.com/images/app.webp)');
-      expect(mockLogger.warn).toHaveBeenCalled();
+    it('rejects image conversion failures without replacing images with links', async () => {
+      vi.spyOn(service, '_materializePdfSafeImage').mockRejectedValue(new Error('download failed'));
+      await expect(service._preparePdfImages('![Image](https://example.com/image.webp)', tempDir))
+        .rejects.toThrow('download failed');
     });
 
     it('should rewrite unsafe raw html img tags to local markdown images', async () => {
@@ -1105,7 +1147,7 @@ describe('PandocPdfService', () => {
   describe('_extractPdfUnsafeImageUrls', () => {
     it('should extract only the image url when markdown image has an optional title', () => {
       expect(
-        service._extractPdfUnsafeImageUrls(
+        service.normalizer._extractPdfUnsafeImageUrls(
           '![App screenshot](https://developers.openai.com/images/app.webp "caption")'
         )
       ).toEqual(['https://developers.openai.com/images/app.webp']);
@@ -1121,7 +1163,7 @@ describe('PandocPdfService', () => {
         '![Real](https://developers.openai.com/images/real.webp)',
       ].join('\n');
 
-      expect(service._extractPdfUnsafeImageUrls(input)).toEqual([
+      expect(service.normalizer._extractPdfUnsafeImageUrls(input)).toEqual([
         'https://developers.openai.com/images/real.webp',
       ]);
     });
@@ -1176,85 +1218,30 @@ describe('PandocPdfService', () => {
   });
 
   describe('_runPandoc', () => {
-    it('should create and cleanup a pandoc header include file for each run', async () => {
+    it.each([true, false])('cleans renderer files on success and missing output (%s)', async (createPdf) => {
       const inputPath = path.join(tempDir, 'input.md');
       const outputPath = path.join(tempDir, 'output.pdf');
-      let headerPath = '';
-      let invocation = 0;
-
-      fs.writeFileSync(inputPath, '# Test', 'utf8');
-
-      const spawnSpy = vi.mocked(spawn).mockImplementation((_command, args) => {
-        invocation += 1;
-        const currentInvocation = invocation;
-        return {
-          stdout: { on: vi.fn() },
-          stderr: { on: vi.fn() },
-          on: vi.fn((event, callback) => {
-            if (event === 'close') {
-              setTimeout(() => {
-                if (currentInvocation === 1) {
-                  const includeIndex = args.indexOf('--include-in-header');
-                  headerPath = includeIndex >= 0 ? args[includeIndex + 1] : '';
-                  expect(headerPath).toBeTruthy();
-                  expect(fs.existsSync(headerPath)).toBe(true);
-
-                  const outputIndex = args.indexOf('-o');
-                  fs.writeFileSync(args[outputIndex + 1], '\\documentclass{article}', 'utf8');
-                } else {
-                  const outputDirArg = args.find((arg) => arg.startsWith('-output-directory='));
-                  const outputDir = outputDirArg?.slice('-output-directory='.length) || tempDir;
-                  fs.writeFileSync(path.join(outputDir, 'input.pdf'), '%PDF-1.4', 'utf8');
-                }
-
-                callback(0);
-              }, 10);
-            }
-          }),
-        };
+      fs.writeFileSync(inputPath, '# Test');
+      let headerPath;
+      service.processRunner.run.mockImplementation(async (command, args) => {
+        if (command === 'pandoc') {
+          headerPath = args[args.indexOf('--include-in-header') + 1];
+          expect(fs.existsSync(headerPath)).toBe(true);
+          fs.writeFileSync(args[args.indexOf('-o') + 1], 'latex source');
+        } else if (createPdf) {
+          const outputDir = args.find((arg) => arg.startsWith('-output-directory=')).split('=')[1];
+          fs.writeFileSync(path.join(outputDir, 'input.pdf'), '%PDF');
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
       });
-
-      await service._runPandoc(inputPath, outputPath, {});
-
-      expect(fs.existsSync(outputPath)).toBe(true);
+      if (createPdf) {
+        await service._runPandoc(inputPath, outputPath);
+        expect(fs.existsSync(outputPath)).toBe(true);
+      } else {
+        await expect(service._runPandoc(inputPath, outputPath)).rejects.toThrow('PDF 文件未生成');
+      }
       expect(fs.existsSync(headerPath)).toBe(false);
-      expect(spawnSpy).toHaveBeenCalledTimes(3);
-
-      spawnSpy.mockReset();
-    });
-
-    it('should reject if output file not created', async () => {
-      const inputPath = path.join(tempDir, 'input.md');
-      const outputPath = path.join(tempDir, 'output.pdf');
-      let invocation = 0;
-
-      fs.writeFileSync(inputPath, '# Test', 'utf8');
-
-      // Mock spawn to simulate success but no file
-      const spawnSpy = vi.mocked(spawn).mockImplementation((_command, args) => {
-        invocation += 1;
-        const currentInvocation = invocation;
-
-        return {
-          stdout: { on: vi.fn() },
-          stderr: { on: vi.fn() },
-          on: vi.fn((event, callback) => {
-            if (event === 'close') {
-              setTimeout(() => {
-                if (currentInvocation === 1) {
-                  const outputIndex = args.indexOf('-o');
-                  fs.writeFileSync(args[outputIndex + 1], '\\documentclass{article}', 'utf8');
-                }
-                callback(0);
-              }, 10); // Exit code 0
-            }
-          }),
-        };
-      });
-
-      await expect(service._runPandoc(inputPath, outputPath, {})).rejects.toThrow('PDF 文件未生成');
-
-      spawnSpy.mockReset();
+      expect(service.processRunner.run).toHaveBeenCalledTimes(3);
     });
   });
 });

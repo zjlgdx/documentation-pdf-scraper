@@ -7,7 +7,7 @@ import os
 import sys
 import json
 import logging
-import fitz  # PyMuPDF
+import pymupdf
 from datetime import datetime
 from urllib.parse import urlparse
 from typing import Dict, List, Optional, Callable, Any
@@ -130,279 +130,34 @@ class PDFMerger:
             raise ConfigurationError(f"配置加载失败: {e}")
 
     def _load_article_titles(self) -> Dict[str, str]:
-        """加载文章标题映射"""
-        article_titles = {}
+        with open(os.path.join(self.metadata_dir, 'articleTitles.json'), encoding='utf-8') as handle:
+            titles = json.load(handle)
+        if not isinstance(titles, dict) or not titles:
+            raise ConfigurationError('articleTitles.json must contain article titles')
+        return titles
 
-        try:
-            # 尝试从元数据目录加载
-            metadata_file = os.path.join(self.metadata_dir, 'articleTitles.json')
-            if os.path.exists(metadata_file):
-                with open(metadata_file, 'r', encoding='utf-8') as f:
-                    article_titles = json.load(f)
-                    pass  # Loaded article titles from metadata
+    def _load_section_structure(self) -> Dict[str, Any]:
+        with open(os.path.join(self.metadata_dir, 'sectionStructure.json'), encoding='utf-8') as handle:
+            structure = json.load(handle)
+        if not isinstance(structure, dict) or not isinstance(structure.get('sections'), list):
+            raise ConfigurationError('sectionStructure.json must contain a sections array')
+        return structure
 
-            # 回退到PDF目录
-            if not article_titles:
-                fallback_file = os.path.join(self.pdf_dir, 'articleTitles.json')
-                if os.path.exists(fallback_file):
-                    with open(fallback_file, 'r', encoding='utf-8') as f:
-                        article_titles = json.load(f)
-                        pass  # Loaded article titles from PDF directory
-
-        except Exception as e:
-            self.logger.warning(f"加载文章标题失败: {e}")
-
-        return article_titles
-
-    def _load_section_structure(self) -> Optional[Dict[str, Any]]:
-        """加载section结构信息（用于分层TOC）"""
-        section_structure = None
-
-        try:
-            # 尝试从元数据目录加载
-            metadata_file = os.path.join(self.metadata_dir, 'sectionStructure.json')
-            if os.path.exists(metadata_file):
-                with open(metadata_file, 'r', encoding='utf-8') as f:
-                    section_structure = json.load(f)
-                    self.logger.info(f"已加载section结构: {len(section_structure.get('sections', []))} sections")
-                    return section_structure
-
-            # 回退到PDF目录
-            fallback_file = os.path.join(self.pdf_dir, 'sectionStructure.json')
-            if os.path.exists(fallback_file):
-                with open(fallback_file, 'r', encoding='utf-8') as f:
-                    section_structure = json.load(f)
-                    self.logger.info(f"已加载section结构（从PDF目录）: {len(section_structure.get('sections', []))} sections")
-                    return section_structure
-
-        except Exception as e:
-            self.logger.debug(f"加载section结构失败（将使用flat TOC）: {e}")
-
-        return section_structure
-
-    def _validate_article_titles(self, pdf_file_count: int) -> bool:
-        """
-        验证 articleTitles.json 是否有效
-
-        Args:
-            pdf_file_count: PDF文件数量（用于比较）
-
-        Returns:
-            bool: 是否有效
-        """
-        if not self.article_titles:
-            self.logger.warning(
-                "⚠️  articleTitles.json 为空或不存在！\n"
-                "    PDF 目录将显示文件名（如 'Page 0', 'Page 1'）而非实际标题。\n"
-                "    可能原因：\n"
-                "      1. 标题提取失败（检查 contentSelector 配置）\n"
-                "      2. 页面加载不完整（检查 navigationWaitUntil 配置）\n"
-                "      3. 页面缺少标题元素（<title> 或 h1-h3）\n"
-                "    建议：重新运行爬取并检查日志中的标题提取警告"
-            )
-            return False
-
-        # 检查标题数量是否合理
-        title_count = len(self.article_titles)
-        if title_count < pdf_file_count * 0.5:
-            self.logger.warning(
-                f"⚠️  标题数量 ({title_count}) 远少于 PDF 文件数量 ({pdf_file_count})！\n"
-                f"    约 {pdf_file_count - title_count} 个页面的标题提取失败。\n"
-                f"    建议：检查爬取日志中的标题提取警告"
-            )
-            return False
-
-        self.logger.info(f"✓ articleTitles 验证通过: {title_count} 个标题")
-        return True
-
-    def _get_pdf_files(self, directory_path: str, engine_filter: str = None) -> List[str]:
-        """
-        获取目录中的PDF文件列表（智能排序）
-
-        支持：
-        1. 数字前缀文件（000-xxx.pdf, 001-xxx.pdf）- 按数字排序
-        2. 哈希前缀文件（676cb9dd-xxx.pdf）- 按文件创建时间排序
-        3. 混合情况 - 数字文件优先，然后哈希文件
-        4. 引擎过滤：只获取特定引擎生成的PDF文件
-
-        Args:
-            directory_path: 目录路径
-            engine_filter: 引擎过滤器，可选值：'puppeteer', None(所有文件)
-        """
-        try:
-            if not os.path.exists(directory_path):
-                return []
-
-            all_files = os.listdir(directory_path)
-            self.logger.debug(f"目录 {directory_path} 中的所有文件: {all_files}")
-
-            files = [
-                f for f in all_files
-                if f.endswith('.pdf') and os.path.isfile(os.path.join(directory_path, f))
-            ]
-
-            # 根据引擎过滤PDF文件
-            if engine_filter:
-                if engine_filter == 'puppeteer':
-                    # 只要包含_puppeteer的文件
-                    files = [f for f in files if '_puppeteer.pdf' in f]
-                elif engine_filter == 'single':
-                    # 只要不包含_puppeteer的文件（单引擎模式的文件）
-                    files = [f for f in files if '_puppeteer.pdf' not in f]
-
-            if not files:
-                return []
-
-            self.logger.debug(f"过滤后的PDF文件 (engine_filter={engine_filter}): {files}")
-
-            # 🔥 智能排序逻辑：支持数字前缀和哈希前缀
-            def get_sort_key(filename: str) -> tuple:
-                try:
-                    # 对于双引擎文件，需要去掉_puppeteer后缀来获取前缀
-                    name_for_sorting = filename
-                    if '_puppeteer.pdf' in filename:
-                        name_for_sorting = filename.replace('_puppeteer.pdf', '.pdf')
-
-                    parts = name_for_sorting.split('-', 1)  # 只分割第一个连字符
-                    if len(parts) == 0:
-                        return (999999, 0, filename)
-
-                    prefix = parts[0]
-
-                    # 检查是否为数字前缀（包括补零的情况）
-                    if prefix.isdigit():
-                        # 数字前缀，按数字大小排序，优先级最高
-                        return (0, int(prefix), filename)
-
-                    # 检查是否为补零的数字前缀（如 001, 002）
-                    try:
-                        # 去掉前导零，但保留至少一个0
-                        num = int(prefix.lstrip('0') or '0')
-                        if prefix.startswith('0') and len(prefix) > 1:
-                            # 这是补零的数字，优先级最高
-                            return (0, num, filename)
-                    except ValueError:
-                        pass
-
-                    # 检查是否为哈希前缀（8位十六进制）
-                    if len(prefix) == 8 and all(c in '0123456789abcdef' for c in prefix.lower()):
-                        # 哈希前缀，按文件创建时间排序，优先级次高
-                        try:
-                            file_path = os.path.join(directory_path, filename)
-                            mtime = os.path.getmtime(file_path)
-                            return (1, mtime, filename)
-                        except:
-                            return (1, 0, filename)
-
-                    # 其他情况，按文件名字母排序，优先级最低
-                    return (2, 0, filename)
-
-                except Exception as e:
-                    self.logger.debug(f"排序键生成失败 {filename}: {e}")
-                    return (999999, 0, filename)
-
-            # 按排序键排序
-            files.sort(key=get_sort_key)
-
-            # 统计不同类型的文件
-            numeric_files = []
-            hash_files = []
-            other_files = []
-
-            for f in files:
-                # 对于双引擎文件，需要去掉引擎后缀来获取前缀
-                name_for_analysis = f
-                if '_puppeteer.pdf' in f:
-                    name_for_analysis = f.replace('_puppeteer.pdf', '.pdf')
-
-                prefix = name_for_analysis.split('-')[0] if '-' in name_for_analysis else ''
-                if prefix.isdigit() or (prefix.startswith('0') and prefix.isdigit()):
-                    numeric_files.append(f)
-                elif len(prefix) == 8 and all(c in '0123456789abcdef' for c in prefix.lower()):
-                    hash_files.append(f)
-                else:
-                    other_files.append(f)
-
-            # Only log if there are significant numbers of files
-            if len(files) > 10:
-                engine_info = f" ({engine_filter} engine)" if engine_filter else ""
-                self.logger.info(f"Found {len(files)} PDF files in {directory_path}{engine_info}")
-
-            self.logger.debug(f"排序后文件列表前5个: {files[:5]}")
-            return files
-
-        except Exception as e:
-            self.logger.error(f"获取PDF文件列表失败: {e}")
-            self.logger.error(f"错误详情: {traceback.format_exc()}")
-            return []
+    def _get_pdf_files(self, directory_path: str) -> List[str]:
+        files = [name for name in os.listdir(directory_path)
+                 if name.endswith('.pdf') and os.path.isfile(os.path.join(directory_path, name))]
+        for name in files:
+            prefix = name.split('-', 1)[0]
+            if not prefix.isdigit():
+                raise FileProcessingError(f'PDF filename must have a numeric article index: {name}')
+        return sorted(files, key=lambda name: int(name.split('-', 1)[0]))
 
     def _create_bookmark_title(self, filename: str, article_titles: Dict[str, str]) -> str:
-        """
-        创建书签标题（改进版）
-        
-        🔧 修复：正确处理引擎后缀，避免标题中出现"Puppeteer"
-
-        优先级：
-        1. 文章标题映射
-        2. 清理后的文件名（移除引擎后缀）
-        
-        支持的文件名格式：
-        - 001-page-name.pdf → "Page Name"
-        - 001-page-name_puppeteer.pdf → "Page Name" (移除引擎后缀)
-        - 001-page-name_puppeteer.pdf → "Page Name" (移除引擎后缀)
-        """
-        try:
-            self.logger.debug(f"为文件创建书签标题: {filename}")
-
-            # 🔥 首先移除引擎后缀（_puppeteer）
-            cleaned_filename = filename
-            if '_puppeteer.pdf' in filename:
-                cleaned_filename = filename.replace('_puppeteer.pdf', '.pdf')
-                self.logger.debug(f"移除Puppeteer引擎后缀: {filename} -> {cleaned_filename}")
-
-            # 提取前缀和文件名部分
-            parts = cleaned_filename.split('-', 1)  # 只分割第一个连字符
-            if len(parts) < 2:
-                title = os.path.splitext(cleaned_filename)[0]
-                self.logger.debug(f"无前缀文件，使用文件名作为标题: {title}")
-                return title
-
-            prefix = parts[0]
-            name_part = parts[1]
-
-            # 🔥 尝试从文章标题映射中查找
-            # 支持数字前缀（包括补零）和原始前缀
-            possible_keys = [prefix]
-
-            # 如果是数字前缀，添加多种可能的键格式
-            if prefix.isdigit():
-                num = int(prefix)
-                possible_keys.extend([
-                    str(num),                    # 去掉前导零: "1"
-                    str(num).zfill(3),          # 3位补零: "001"
-                    str(num).zfill(2)           # 2位补零: "01"
-                ])
-
-            # 查找标题映射
-            for key in possible_keys:
-                if key in article_titles:
-                    title = article_titles[key]
-                    self.logger.debug(f"找到文章标题映射 {key}: {title}")
-                    return title
-
-            # 如果没找到映射，使用清理后的文件名
-            cleaned_name = os.path.splitext(name_part)[0]
-            # 将连字符和下划线替换为空格，使用标题格式
-            title = cleaned_name.replace('-', ' ').replace('_', ' ')
-            # 转换为标题格式：每个单词首字母大写
-            title = ' '.join(word.capitalize() for word in title.split())
-
-            self.logger.debug(f"使用清理后的文件名作为标题: {title}")
-            return title
-
-        except Exception as e:
-            self.logger.warning(f"创建书签标题失败 {filename}: {e}")
-            return os.path.splitext(filename)[0]
+        index = str(int(filename.split('-', 1)[0]))
+        title = article_titles.get(index)
+        if not isinstance(title, str) or not title.strip():
+            raise ConfigurationError(f'Missing article title for {filename}')
+        return title
 
     def _build_hierarchical_toc(
         self,
@@ -422,11 +177,6 @@ class PDFMerger:
             分层TOC列表 [[level, title, page, link], ...]
         """
         toc = []
-
-        if not self.section_structure or 'sections' not in self.section_structure:
-            # Fallback到flat TOC
-            self.logger.debug("没有section结构，使用flat TOC")
-            return None
 
         sections = self.section_structure['sections']
         current_page = 0
@@ -448,7 +198,7 @@ class PDFMerger:
 
         # 遍历每个section
         for section in sections:
-            section_title = section.get('title', 'Untitled Section')
+            section_title = section['title']
             section_pages = section.get('pages', [])
 
             if not section_pages:
@@ -469,7 +219,7 @@ class PDFMerger:
 
                 if found_file and found_file in file_page_map:
                     page_start = file_page_map[found_file]
-                    page_title = self.article_titles.get(page_index, f"Page {page_index}")
+                    page_title = self.article_titles[page_index]
 
                     if section_start_page is None:
                         section_start_page = page_start
@@ -561,16 +311,15 @@ class PDFMerger:
         directory_path: str,
         output_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        engine_filter: str = None
     ) -> bool:
         """流式合并PDF文件"""
         try:
-            files = self._get_pdf_files(directory_path, engine_filter)
+            files = self._get_pdf_files(directory_path)
             if not files:
                 return False
 
-            # 验证 articleTitles.json
-            self._validate_article_titles(len(files))
+            for filename in files:
+                self._create_bookmark_title(filename, self.article_titles)
 
             merged_pdf = None
             current_file_pdf = None
@@ -579,7 +328,7 @@ class PDFMerger:
                 # 确保输出目录存在
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-                merged_pdf = fitz.open()  # 创建空的PDF文档
+                merged_pdf = pymupdf.open()  # 创建空的PDF文档
                 toc = []  # 目录结构
 
                 # 🔥 新增：收集信息用于构建分层TOC
@@ -595,17 +344,14 @@ class PDFMerger:
 
                         # 检查文件是否存在
                         if not os.path.exists(file_path):
-                            self.logger.error(f"文件不存在: {file_path}")
-                            continue
+                            raise FileProcessingError(f"文件不存在: {file_path}")
 
                         # 打开当前PDF文件
-                        current_file_pdf = fitz.open(file_path)
+                        current_file_pdf = pymupdf.open(file_path)
                         page_count = current_file_pdf.page_count
 
                         if page_count == 0:
-                            self.logger.warning(f"跳过空PDF文件: {filename}")
-                            current_file_pdf.close()
-                            continue
+                            raise FileProcessingError(f"空PDF文件: {filename}")
 
                         # 记录合并前的页数
                         start_page = merged_pdf.page_count
@@ -627,7 +373,7 @@ class PDFMerger:
                             # "001" → "1", "000" → "0"
                             file_to_index[filename] = str(int(prefix))
 
-                        # 创建书签（用于flat TOC fallback）
+                        # 创建书签（用于无分组的目录）
                         bookmark_title = self._create_bookmark_title(filename, self.article_titles)
                         toc.append([
                             1,  # 级别
@@ -663,22 +409,13 @@ class PDFMerger:
                             current_file_pdf.close()
                             current_file_pdf = None
 
-                        # 继续处理下一个文件
-                        continue
+                        raise FileProcessingError(error_msg) from e
 
-                # 🔥 新增：尝试构建分层TOC
-                hierarchical_toc = None
-                if self.section_structure:
-                    try:
-                        hierarchical_toc = self._build_hierarchical_toc(files, page_counts, file_to_index)
-                        if hierarchical_toc:
-                            self.logger.info(f"使用分层TOC结构")
-                            toc = hierarchical_toc
-                        else:
-                            self.logger.info(f"使用flat TOC结构（无section信息）")
-                    except Exception as e:
-                        self.logger.warning(f"构建分层TOC失败，使用flat TOC: {e}")
-                        # toc已经包含flat结构，无需修改
+                # Empty sections explicitly select a flat article outline.
+                if self.section_structure['sections']:
+                    toc = self._build_hierarchical_toc(files, page_counts, file_to_index)
+                    if sum(entry[0] == 2 for entry in toc) != len(files):
+                        raise ConfigurationError('Section metadata does not cover every PDF article')
 
                 # 设置目录结构（如果启用了书签功能）
                 bookmarks_enabled = self.config.get('pdf', {}).get('bookmarks', True)
@@ -712,13 +449,7 @@ class PDFMerger:
 
         except Exception as e:
             self.logger.error(f"merge_pdfs_stream 执行失败: {e}")
-            self.logger.error(f"错误详情: {traceback.format_exc()}")
-            return False
-
-    def _detect_dual_engine_mode(self, directory_path: str) -> bool:
-        """检测是否为双引擎模式（已弃用，现在只支持Puppeteer）"""
-        # 双引擎模式已移除，始终返回False
-        return False
+            raise FileProcessingError(str(e)) from e
 
     def merge_directory(self, directory_name: Optional[str] = None) -> List[str]:
         """合并指定目录或所有子目录的PDF文件"""
@@ -770,7 +501,7 @@ class PDFMerger:
                             item_path = os.path.join(self.pdf_dir, item)
 
                             # 跳过非目录和特殊目录
-                            if not os.path.isdir(item_path) or item in ['finalPdf', 'metadata', '.temp']:
+                            if not os.path.isdir(item_path) or item.startswith('finalPdf') or item in [os.path.basename(self.final_pdf_dir), os.path.basename(self.metadata_dir), '.temp']:
                                 self.logger.debug(f"跳过项目: {item} (非目录或特殊目录)")
                                 continue
 
@@ -787,11 +518,11 @@ class PDFMerger:
                         except Exception as e:
                             self.logger.error(f"处理子目录 {item} 时出错: {e}")
                             self.logger.error(f"错误详情: {traceback.format_exc()}")
-                            continue
+                            raise
 
                 except Exception as e:
                     self.logger.error(f"列出PDF目录内容时出错: {e}")
-                    self.logger.error(f"错误详情: {traceback.format_exc()}")
+                    raise
 
             return merged_files
 
@@ -885,13 +616,16 @@ def main():
             result = merger.run()
             merged_files = result.get('merged_files', [])
 
-        # Output results  
+        stats = merger.get_statistics()
+        if not merged_files or stats['errors_count'] > 0:
+            raise RuntimeError('PDF merge did not complete successfully')
+
+        # Output results
         print(f"\n✅ Merge completed! Generated {len(merged_files)} PDF file(s):")
         for file_path in merged_files:
             print(f"  📄 {file_path}")
 
         # Output statistics
-        stats = merger.get_statistics()
         print(f"\n📊 Statistics:")
         print(f"  - Files processed: {stats['files_processed']}")
         print(f"  - Total pages: {stats['total_pages']}")
@@ -901,6 +635,12 @@ def main():
         if stats['errors_count'] > 0:
             print(f"  ⚠️  Errors: {stats['errors_count']}")
 
+        print(json.dumps({
+            'success': True,
+            'mergedFiles': [str(file_path) for file_path in merged_files],
+            'filesProcessed': stats['files_processed'],
+            'totalPages': stats['total_pages'],
+        }))
         return 0
 
     except Exception as e:

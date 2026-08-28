@@ -1,4 +1,5 @@
 import Container from './container.js';
+import { ProcessRunner } from '../utils/processRunner.js';
 import { createLogger } from '../utils/logger.js';
 import { validateConfig } from '../config/configValidator.js';
 import { ConfigLoader } from '../config/configLoader.js';
@@ -52,6 +53,7 @@ function registerFoundationServices(container, setupLogger) {
     setupLogger.info('Configuration loaded and validated');
     return config;
   });
+  registerSingleton(container, 'processRunner', () => new ProcessRunner());
   registerSingleton(container, 'logger', () => createLogger('App'));
   registerSingleton(container, 'fileService', (logger) => new FileService(logger), ['logger']);
   registerSingleton(container, 'pathService', (config) => new PathService(config), ['config']);
@@ -96,15 +98,11 @@ function registerBrowserServices(container) {
   registerSingleton(
     container,
     'browserPool',
-    async (config, logger) => {
-      const browserPool = new BrowserPool({
-        maxBrowsers: config.concurrency || 5,
-        headless: true,
-        logger,
-      });
-      await browserPool.initialize();
-      return browserPool;
-    },
+    (config, logger) => new BrowserPool({
+      maxBrowsers: config.concurrency || 5,
+      headless: true,
+      logger,
+    }),
     ['config', 'logger']
   );
   registerSingleton(
@@ -159,12 +157,13 @@ function registerContentServices(container) {
   registerSingleton(
     container,
     'markdownToPdfService',
-    (config, logger, metadataService) => new PandocPdfService({
+    (config, logger, metadataService, processRunner) => new PandocPdfService({
+      processRunner,
       config,
       logger,
       metadataService,
     }),
-    ['config', 'logger', 'metadataService']
+    ['config', 'logger', 'metadataService', 'processRunner']
   );
 }
 
@@ -182,8 +181,8 @@ function registerApplicationServices(container) {
   registerSingleton(
     container,
     'pythonMergeService',
-    (config, logger) => new PythonMergeService(config, logger),
-    ['config', 'logger']
+    (config, logger, processRunner) => new PythonMergeService(config, logger, processRunner),
+    ['config', 'logger', 'processRunner']
   );
 }
 

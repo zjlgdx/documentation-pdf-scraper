@@ -142,6 +142,7 @@ describe('ConfigValidator', () => {
         pdfDir: './pdfs',
         navLinksSelector: 'nav a',
         contentSelector: 'main',
+        markdown: { enabled: true },
         markdownPdf: {
           enabled: true,
           cjkMainFont: 'Source Han Sans SC',
@@ -389,6 +390,8 @@ describe('ConfigValidator', () => {
         pdfDir: './pdfs',
         navLinksSelector: 'nav a',
         contentSelector: 'main',
+        markdown: { enabled: true },
+        markdownPdf: { enabled: true },
         markdownSource: {
           enabled: true,
           urlSuffix: '.md',
@@ -407,6 +410,8 @@ describe('ConfigValidator', () => {
         pdfDir: './pdfs',
         navLinksSelector: 'nav a',
         contentSelector: 'main',
+        markdown: { enabled: true },
+        markdownPdf: { enabled: true },
         markdownSource: {
           enabled: true,
         },
@@ -563,7 +568,6 @@ describe('ConfigValidator', () => {
       expect(defaultConfig.pdf).toBeDefined();
       expect(defaultConfig.python).toBeDefined();
       expect(defaultConfig.state).toBeDefined();
-      expect(defaultConfig.monitoring).toBeDefined();
       expect(defaultConfig.network).toBeDefined();
     });
   });

@@ -69,8 +69,10 @@ jobs:
             texlive-latex-extra \
             texlive-lang-chinese \
             fonts-noto-cjk \
+            fonts-dejavu-core \
             fonts-lmodern \
             libcairo2 \
+            poppler-utils \
             lmodern
 
       - name: Install latest Pandoc
@@ -86,6 +88,14 @@ jobs:
 
       - name: Generate PDF
         run: make run
+
+      - name: Upload verification reports and review previews
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pdf-review-${{ inputs.doc_target }}
+          path: pdfs/finalPdf/qa/
+          retention-days: 30
 
       - name: Find generated PDF
         id: find-pdf

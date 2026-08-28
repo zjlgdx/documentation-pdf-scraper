@@ -83,11 +83,6 @@ export class Scraper extends EventEmitter {
     try {
       this.logger.info('开始初始化爬虫...');
 
-      // 初始化浏览器池（如果还没有初始化）
-      if (!this.browserPool.isInitialized) {
-        await this.browserPool.initialize();
-      }
-
       // 加载状态（如果还没有加载）
       if (this.stateManager && typeof this.stateManager.load === 'function') {
         await this.stateManager.load();
@@ -178,11 +173,8 @@ export class Scraper extends EventEmitter {
         const entryUrl = entryPoints[sectionIndex];
 
         try {
-          // 提取section标题
-          const sectionTitle = await this._extractSectionTitle(page, entryUrl);
-
-          // 收集该入口页面侧边栏的URLs（入口点列表在此处统一计算，避免重复日志与计算）
           const entryUrls = await this._collectUrlsFromEntryPoint(page, entryUrl, entryPoints);
+          const sectionTitle = await this._extractSectionTitle(page, entryUrl);
 
           // 记录section信息
           const sectionInfo = {
@@ -213,18 +205,12 @@ export class Scraper extends EventEmitter {
             urlCount: entryUrls.length,
           });
         } catch (entryError) {
-          this.logger.error('入口URL收集失败，将跳过该入口', {
+          this.logger.error('入口URL收集失败', {
             entryUrl,
             error: entryError.message,
           });
 
-          // 即使失败也添加一个空section占位
-          sections.push({
-            index: sectionIndex,
-            title: `Section ${sectionIndex + 1}`,
-            entryUrl: entryUrl,
-            pages: [],
-          });
+          throw entryError;
         }
       }
       this.logger.info(`提取到 ${rawUrls.length} 个原始URL，分属 ${sections.length} 个section`, {
@@ -496,156 +482,26 @@ export class Scraper extends EventEmitter {
    * @returns {Promise<string|null>}
    */
   async _extractSectionTitle(page, entryUrl) {
-    try {
-      // 1. 优先使用配置中的手动映射
-      if (this.config.sectionTitles && this.config.sectionTitles[entryUrl]) {
-        this.logger.debug(`使用配置的section标题: ${this.config.sectionTitles[entryUrl]}`, {
-          entryUrl,
-        });
-        return this.config.sectionTitles[entryUrl];
+    const configuredTitle = this.config.sectionTitles?.[entryUrl];
+    if (configuredTitle) return configuredTitle;
+
+    const title = await page.evaluate((targetUrl, selector) => {
+      const target = new URL(targetUrl);
+      for (const link of document.querySelectorAll(selector)) {
+        const href = link.getAttribute('href');
+        if (!href) continue;
+        const url = new URL(href, window.location.href);
+        if (url.origin === target.origin
+          && url.pathname.replace(/\/$/, '') === target.pathname.replace(/\/$/, '')) {
+          const text = link.textContent?.trim();
+          if (text) return text;
+        }
       }
+      return document.querySelector('h1, [role="heading"][aria-level="1"]')?.textContent?.trim();
+    }, entryUrl, this.config.navLinksSelector);
 
-      // 2. 从导航菜单中提取标题
-      const title = await page.evaluate(
-        (targetUrl, navSelector) => {
-          try {
-            // 规范化URL以便比较
-            const normalizeUrl = (url) => {
-              try {
-                const parsed = new URL(url, window.location.href);
-                return parsed.href.replace(/\/$/, ''); // 移除尾部斜杠
-              } catch {
-                return url;
-              }
-            };
-
-            const normalizedTarget = normalizeUrl(targetUrl);
-
-            // 查找所有导航链接
-            const navLinks = document.querySelectorAll(navSelector);
-
-            // 🔥 改进：使用更严格的URL匹配逻辑
-            let bestMatch = null;
-            let bestMatchScore = -1;
-
-            for (const link of navLinks) {
-              const href = link.href || link.getAttribute('href');
-              if (!href) continue;
-
-              const normalizedHref = normalizeUrl(href);
-
-              // 计算匹配得分
-              let score = 0;
-
-              // 1. 精确匹配：最高优先级
-              if (normalizedHref === normalizedTarget) {
-                score = 1000;
-              }
-              // 2. 路径深度相同的前缀匹配：次高优先级
-              else {
-                try {
-                  const targetPath = new URL(normalizedTarget).pathname;
-                  const hrefPath = new URL(normalizedHref).pathname;
-
-                  const targetDepth = targetPath.split('/').filter(Boolean).length;
-                  const hrefDepth = hrefPath.split('/').filter(Boolean).length;
-
-                  // 只匹配相同深度且完全相等的路径（避免误匹配相似前缀，如 overview vs overview-advanced）
-                  if (targetDepth === hrefDepth && targetPath === hrefPath) {
-                    score = 500;
-                  }
-                  // 允许href比target短1级（用于section入口）
-                  else if (targetDepth === hrefDepth + 1 && targetPath.startsWith(hrefPath + '/')) {
-                    score = 300;
-                  }
-                } catch {
-                  // URL解析失败，跳过
-                  continue;
-                }
-              }
-
-              // 如果匹配分数更高，更新最佳匹配
-              if (score > bestMatchScore) {
-                const text = link.textContent?.trim();
-
-                // 如果链接本身没有文本，尝试找最近的父节点标题
-                let finalText = text;
-                if (!finalText || finalText.length < 2) {
-                  let parent = link.parentElement;
-                  let attempts = 0;
-                  while (parent && attempts < 3) {
-                    const heading = parent.querySelector(
-                      'h1, h2, h3, h4, h5, h6, [role="heading"]'
-                    );
-                    if (heading) {
-                      finalText = heading.textContent?.trim();
-                      break;
-                    }
-                    parent = parent.parentElement;
-                    attempts++;
-                  }
-                }
-
-                if (finalText && finalText.length >= 2) {
-                  bestMatch = finalText;
-                  bestMatchScore = score;
-
-                  // 如果找到精确匹配，立即返回
-                  if (score === 1000) {
-                    return bestMatch;
-                  }
-                }
-              }
-            }
-
-            // 返回最佳匹配
-            if (bestMatch) {
-              return bestMatch;
-            }
-
-            // 如果导航中没找到，尝试从页面主标题提取
-            const mainHeading = document.querySelector('h1, [role="heading"][aria-level="1"]');
-            if (mainHeading) {
-              return mainHeading.textContent?.trim();
-            }
-
-            return null;
-          } catch (e) {
-            console.error('提取section标题失败:', e);
-            return null;
-          }
-        },
-        entryUrl,
-        this.config.navLinksSelector
-      );
-
-      if (title) {
-        this.logger.debug(`从导航提取到section标题: ${title}`, { entryUrl });
-        return title;
-      }
-
-      // 3. 降级方案：从URL路径生成标题
-      const url = new URL(entryUrl);
-      const pathParts = url.pathname.split('/').filter(Boolean);
-      const lastPart = pathParts[pathParts.length - 1];
-      const fallbackTitle = lastPart
-        .split('-')
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
-
-      this.logger.debug(`使用URL生成的fallback标题: ${fallbackTitle}`, { entryUrl });
-      return fallbackTitle;
-    } catch (error) {
-      this.logger.warn('提取section标题失败，使用fallback', {
-        entryUrl,
-        error: error.message,
-      });
-
-      // 返回简单的fallback
-      const url = new URL(entryUrl);
-      const pathParts = url.pathname.split('/').filter(Boolean);
-      return pathParts[pathParts.length - 1] || 'Section';
-    }
+    if (!title) throw new ValidationError(`Missing section title: ${entryUrl}`);
+    return title;
   }
 
   /**
@@ -987,151 +843,51 @@ export class Scraper extends EventEmitter {
    * 直接从 URL 获取 Markdown 源文件内容
    * 用于支持提供原始 .md 文件的文档站点（如 code.claude.com）
    * @param {string} url - 原始页面 URL
-   * @returns {Promise<{content: string, title: string}|null>}
+   * @returns {Promise<{content: string, title: string}>}
    */
   async _fetchMarkdownSource(url) {
-    const suffix = this.config.markdownSource?.urlSuffix || '.md';
-    const mdUrl = url.endsWith(suffix) ? url : url + suffix;
-
-    this.logger.debug('尝试获取 Markdown 源文件', { url, mdUrl });
-
-    try {
-      const response = await fetch(mdUrl, {
-        headers: {
-          'User-Agent': this.config.browser?.userAgent || 'Mozilla/5.0',
-          Accept: 'text/markdown, text/plain, */*',
-        },
-        signal: AbortSignal.timeout(this.config.pageTimeout || 30000),
-      });
-
-      if (!response.ok) {
-        this.logger.warn('Markdown 源文件获取失败', {
-          mdUrl,
-          status: response.status,
-          statusText: response.statusText,
-        });
-        return null;
-      }
-
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('markdown') && !contentType.includes('text/plain')) {
-        this.logger.debug('响应类型不是 Markdown', { mdUrl, contentType });
-        // 仍然尝试使用内容，某些服务器可能返回错误的 content-type
-      }
-
-      const content = await response.text();
-
-      // 从 Markdown 内容中提取标题（第一个 # 标题）
-      const titleMatch = content.match(/^#\s+(.+)$/m);
-      const title = titleMatch ? titleMatch[1].trim() : null;
-
-      this.logger.info('成功获取 Markdown 源文件', {
-        mdUrl,
-        contentLength: content.length,
-        title: title || '(未找到标题)',
-      });
-
-      return { content, title };
-    } catch (error) {
-      this.logger.warn('Markdown 源文件获取异常', {
-        mdUrl,
-        error: error.message,
-      });
-      return null;
+    const sourceUrl = new URL(url);
+    const suffix = this.config.markdownSource.urlSuffix || '.md';
+    if (!sourceUrl.pathname.endsWith(suffix)) sourceUrl.pathname += suffix;
+    sourceUrl.hash = '';
+    const mdUrl = sourceUrl.href;
+    const response = await fetch(mdUrl, {
+      headers: {
+        'User-Agent': this.config.browser?.userAgent || 'Mozilla/5.0',
+        Accept: 'text/markdown, text/plain',
+      },
+      signal: AbortSignal.timeout(this.config.pageTimeout || 30000),
+    });
+    if (!response.ok) {
+      throw new NetworkError(`Markdown source HTTP ${response.status}: ${mdUrl}`, mdUrl);
     }
+    const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!['text/markdown', 'text/plain', 'text/x-markdown'].includes(contentType)) {
+      throw new ValidationError(`Expected Markdown response, received ${contentType}: ${mdUrl}`);
+    }
+    const content = await response.text();
+    const title = content.match(/^#\s+(.+)$/m)?.[1].trim();
+    if (!content.trim() || !title) {
+      throw new ValidationError(`Markdown source must contain an H1 title: ${mdUrl}`);
+    }
+    this.logger.info('成功获取 Markdown 源文件', { mdUrl, contentLength: content.length, title });
+    return { content, title };
   }
 
-  /**
-   * 渐进式导航策略 - 从快到慢尝试不同的等待策略
-   * 支持通过 config.navigationStrategy 自定义首选策略
-   */
-  async navigateWithFallback(page, url) {
-    let strategies = [
-      // 1. 快速策略 - 适合简单页面
-      {
-        name: 'domcontentloaded',
-        options: { waitUntil: 'domcontentloaded', timeout: 15000 },
-      },
-      // 2. 标准策略 - 等待网络空闲
-      {
-        name: 'networkidle2',
-        options: { waitUntil: 'networkidle2', timeout: 30000 },
-      },
-      // 3. 完整策略 - 等待所有资源
-      {
-        name: 'networkidle0',
-        options: { waitUntil: 'networkidle0', timeout: 45000 },
-      },
-      // 4. 最大容忍策略 - 仅等待页面加载
-      {
-        name: 'load',
-        options: { waitUntil: 'load', timeout: 60000 },
-      },
-    ];
-
-    // 如果配置了首选策略（非 auto），将其移到首位
-    const preferredStrategy = this.config.navigationStrategy;
-    if (preferredStrategy && preferredStrategy !== 'auto') {
-      const preferred = strategies.find((s) => s.name === preferredStrategy);
-      if (preferred) {
-        const others = strategies.filter((s) => s.name !== preferredStrategy);
-        strategies = [preferred, ...others];
-        this.logger.debug(`使用首选导航策略: ${preferredStrategy}`, { url });
-      }
+  async navigatePage(page, url) {
+    const response = await page.goto(url, {
+      waitUntil: this.config.navigationStrategy || 'domcontentloaded',
+      timeout: this.config.pageTimeout || 30000,
+    });
+    if (response && response.status() >= 400) {
+      throw new NetworkError(`HTTP ${response.status()}: ${url}`, url);
     }
-
-    let lastError = null;
-
-    for (const strategy of strategies) {
-      try {
-        this.logger.debug(`尝试导航策略: ${strategy.name}`, { url });
-
-        const response = await page.goto(url, strategy.options);
-
-        // 检查响应状态
-        if (response && response.status() >= 400) {
-          throw new Error(`HTTP ${response.status()}: ${response.statusText()}`);
-        }
-
-        this.logger.debug(`导航成功使用策略: ${strategy.name}`, { url });
-        return { success: true, strategy: strategy.name };
-      } catch (error) {
-        lastError = error;
-        this.logger.warn(`导航策略 ${strategy.name} 失败`, {
-          url,
-          error: error.message,
-        });
-
-        // 如果是超时错误，继续尝试下一个策略
-        if (error.message.includes('timeout') || error.message.includes('Navigation timeout')) {
-          continue;
-        }
-
-        // 如果是其他错误，根据错误类型决定是否继续
-        if (
-          error.message.includes('net::ERR_ABORTED') ||
-          error.message.includes('net::ERR_FAILED')
-        ) {
-          // 网络错误，尝试等待一下再重试
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          continue;
-        }
-
-        // 其他类型的错误直接失败
-        break;
-      }
-    }
-
-    return { success: false, error: lastError?.message || 'All navigation strategies failed' };
   }
 
   async _preparePageForScraping(page, url, index) {
     await this.imageService.setupImageObserver(page);
 
-    const navigationResult = await this.navigateWithFallback(page, url);
-    if (!navigationResult.success) {
-      throw new Error(`导航失败: ${navigationResult.error}`);
-    }
+    await this.navigatePage(page, url);
 
     await this._waitForPageContent(page, url);
     const titleInfo = await this._extractPageTitle(page);
@@ -1241,42 +997,31 @@ export class Scraper extends EventEmitter {
     return Boolean(
       this.config.markdown?.enabled
       && this.config.markdownPdf?.enabled
-      && this.markdownService
-      && this.markdownToPdfService
     );
   }
 
-  async _generatePageOutput({ page, url, index, title, pdfPath }) {
+  async _generatePageOutput({ page, url, index, title, pdfPath, markdown }) {
     if (!this._isMarkdownWorkflowEnabled()) {
-      await this._translatePageSafely(page, url);
+      await this._translatePage(page, url);
       await this._generatePuppeteerPdf(page, pdfPath);
       return { actualOutputPath: pdfPath, isBatchMode: false };
     }
 
-    try {
-      return await this._generateMarkdownOutput({ page, url, index, title, pdfPath });
-    } catch (error) {
-      this.logger.warn('Markdown 工作流失败，回退到 Puppeteer PDF', {
-        url,
-        error: error.message,
-      });
-      await this._translatePageSafely(page, url);
-      await this._generatePuppeteerPdf(page, pdfPath, { fallback: true });
-      return { actualOutputPath: pdfPath, isBatchMode: false };
-    }
+    return this._generateMarkdownOutput({ page, url, index, title, pdfPath, markdown });
   }
 
-  async _generateMarkdownOutput({ page, url, index, title, pdfPath }) {
-    const { markdownContent, sourceTitle } = await this._loadMarkdownContent(page, url, pdfPath);
+  async _generateMarkdownOutput({ page, url, index, title, pdfPath, markdown }) {
+    const { markdownContent, sourceTitle } = markdown
+      || await this._loadMarkdownContent(page, url, pdfPath);
     const markdownWithFrontmatter = this.markdownService.addFrontmatter(markdownContent, {
       title: sourceTitle || title,
       url,
       index,
     });
-    const translatedMarkdown = this.translationService
+    const translatedMarkdown = this.config.translation?.enabled
       ? await this.translationService.translateMarkdown(markdownWithFrontmatter)
       : markdownWithFrontmatter;
-    const { translatedMarkdownPath } = await this._writeMarkdownArtifacts({
+    const markdownPath = await this._writeMarkdownArtifacts({
       pdfPath,
       markdownWithFrontmatter,
       translatedMarkdown,
@@ -1285,9 +1030,9 @@ export class Scraper extends EventEmitter {
     if (this.config.markdownPdf?.batchMode) {
       this.logger.info('Batch mode enabled - skipping individual PDF generation', {
         url,
-        markdownPath: translatedMarkdownPath,
+        markdownPath,
       });
-      return { actualOutputPath: translatedMarkdownPath, isBatchMode: true };
+      return { actualOutputPath: markdownPath, isBatchMode: true };
     }
 
     await this.markdownToPdfService.convertContentToPdf(
@@ -1302,7 +1047,6 @@ export class Scraper extends EventEmitter {
   async _loadMarkdownContent(page, url, pdfPath) {
     if (this.config.markdownSource?.enabled) {
       const source = await this._fetchMarkdownSource(url);
-      if (source) {
         const normalizedSource = this.markdownService.normalizeResourceUrls(source.content, url);
         const markdownContent = this.markdownService.sanitizeMarkdown(normalizedSource, {
           pageUrl: url,
@@ -1313,7 +1057,6 @@ export class Scraper extends EventEmitter {
           titleFromSource: source.title,
         });
         return { markdownContent, sourceTitle: source.title };
-      }
     }
 
     this.logger.info('使用 DOM 转换 Markdown 工作流', { url, pdfPath });
@@ -1336,27 +1079,21 @@ export class Scraper extends EventEmitter {
     const translatedMarkdownPath = path.join(markdownOutputDir, `${baseName}_translated.md`);
 
     await this.fileService.writeText(originalMarkdownPath, markdownWithFrontmatter);
-    await this.fileService.writeText(translatedMarkdownPath, translatedMarkdown);
-    return { originalMarkdownPath, translatedMarkdownPath };
-  }
-
-  async _translatePageSafely(page, url) {
-    if (!this.translationService) return;
-
-    try {
-      this.logger.info('Before translation wait');
-      await this.translationService.translatePage(page);
-      this.logger.info('After translation wait');
-    } catch (error) {
-      this.logger.warn('翻译失败，继续生成原始PDF', { url, error: error.message });
+    if (this.config.translation?.enabled) {
+      await this.fileService.writeText(translatedMarkdownPath, translatedMarkdown);
+      return translatedMarkdownPath;
     }
+    return originalMarkdownPath;
   }
 
-  async _generatePuppeteerPdf(page, pdfPath, { fallback = false } = {}) {
-    this.logger.info(
-      fallback ? '开始使用Puppeteer引擎生成PDF（回退模式）' : '开始使用Puppeteer引擎生成PDF',
-      { pdfPath }
-    );
+  async _translatePage(page, url) {
+    if (!this.config.translation?.enabled) return;
+    this.logger.info('翻译页面', { url });
+    await this.translationService.translatePage(page);
+  }
+
+  async _generatePuppeteerPdf(page, pdfPath) {
+    this.logger.info('开始使用Puppeteer引擎生成PDF', { pdfPath });
     await page.pdf({
       ...this.pdfStyleService.getPDFOptions(),
       path: pdfPath,
@@ -1406,21 +1143,7 @@ export class Scraper extends EventEmitter {
       return;
     }
 
-    this.logger.warn(`⚠️ 标题提取失败 [${index}/${this.urlQueue.length}]: ${url}`, {
-      contentSelector: this.config.contentSelector,
-      source: titleInfo.source,
-      titleInfo,
-      hint:
-        'PDF目录将显示文件名而非实际标题。请检查：'
-        + '\n  1. contentSelector 是否正确匹配页面结构'
-        + '\n  2. 页面是否完全加载（检查 navigationWaitUntil 配置）'
-        + '\n  3. 页面是否有 <title> 标签或 h1-h3 标题元素',
-    });
-    await this.metadataService.logFailedLink(
-      url,
-      index,
-      new Error(`Title extraction failed: source=${titleInfo.source}`)
-    );
+    throw new ValidationError(`Title extraction failed for ${url}: source=${titleInfo.source}`);
   }
 
   _recordScrapeFailure(url, index, error, isRetry) {
@@ -1467,12 +1190,6 @@ export class Scraper extends EventEmitter {
       this.logger.info(`开始爬取页面 [${index + 1}/${this.urlQueue.length}]: ${url}`);
       this.progressTracker.startUrl?.(url);
 
-      // 创建页面
-      page = await this.pageManager.createPage(pageId);
-
-      const { titleInfo, imagesLoaded } = await this._preparePageForScraping(page, url, index);
-      const title = titleInfo.title;
-
       // 🔥 关键修改：生成PDF时使用数字索引而不是哈希
       const pdfPath = this.pathService.getPdfPath(url, {
         useHash: false, // 使用索引而不是哈希
@@ -1481,7 +1198,20 @@ export class Scraper extends EventEmitter {
 
       await this.fileService.ensureDirectory(path.dirname(pdfPath));
 
-      const output = await this._generatePageOutput({ page, url, index, title, pdfPath });
+      let titleInfo;
+      let imagesLoaded = null;
+      let markdown;
+      if (this.config.markdownSource?.enabled) {
+        markdown = await this._loadMarkdownContent(null, url, pdfPath);
+        titleInfo = { title: markdown.sourceTitle, source: 'markdown' };
+      } else {
+        page = await this.pageManager.createPage(pageId);
+        ({ titleInfo, imagesLoaded } = await this._preparePageForScraping(page, url, index));
+      }
+
+      const output = await this._generatePageOutput({
+        page, url, index, title: titleInfo.title, pdfPath, markdown,
+      });
       return await this._persistScrapeSuccess({
         url,
         index,

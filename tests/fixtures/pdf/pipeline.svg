@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="200" viewBox="0 0 960 200">
+  <rect width="960" height="200" fill="#f4f6f8"/>
+  <g fill="#19354b">
+    <rect x="28" y="55" width="260" height="90" rx="8"/>
+    <rect x="350" y="55" width="260" height="90" rx="8"/>
+    <rect x="672" y="55" width="260" height="90" rx="8"/>
+  </g>
+  <path d="M300 100h38m-10-10 10 10-10 10M622 100h38m-10-10 10 10-10 10" fill="none" stroke="#496575" stroke-width="4"/>
+  <g fill="white" font-family="sans-serif" font-size="26" text-anchor="middle">
+    <text x="158" y="109">Markdown</text>
+    <text x="480" y="109">Pandoc / XeLaTeX</text>
+    <text x="802" y="109">Verify and review</text>
+  </g>
+</svg>

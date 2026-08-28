@@ -4,7 +4,7 @@
  */
 
 import { EventEmitter } from 'events';
-import { spawn } from 'child_process';
+import { ProcessRunner } from '../utils/processRunner.js';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
@@ -34,20 +34,21 @@ export class PythonMergeService extends EventEmitter {
    * - 支持配置驱动和环境变量
    */
 
-  constructor(config = {}, logger = null) {
+  constructor(config = {}, logger = null, processRunner = new ProcessRunner()) {
     super();
 
     this.config = config;
+    this.processRunner = processRunner;
     this.logger = logger || createLogger('PythonMergeService');
 
     // Python脚本路径
     this.pythonScriptDir = path.join(__dirname, '..', 'python');
     this.mergerScript = path.join(this.pythonScriptDir, 'pdf_merger.py');
-    this.configScript = path.join(this.pythonScriptDir, 'config_manager.py');
 
     // 运行时状态
     this.isRunning = false;
-    this.currentProcess = null;
+    this.mergeController = null;
+    this.currentRun = null;
     this.statistics = {
       totalRuns: 0,
       successfulRuns: 0,
@@ -61,9 +62,9 @@ export class PythonMergeService extends EventEmitter {
 
     // Python环境配置
     this.pythonConfig = {
-      executable: config.python?.executable || config.pythonExecutable || 'python3',
-      timeout: config.python?.timeout || config.pythonTimeout || 300000, // 5分钟超时
-      maxBuffer: config.maxBuffer || 1024 * 1024 * 10, // 10MB缓冲区
+      executable: config.python?.executable || 'python3',
+      timeout: config.python?.timeout || 300000, // 5分钟超时
+      maxBuffer: config.python?.maxBuffer || 1024 * 1024 * 10, // 10MB缓冲区
       encoding: 'utf-8',
     };
 
@@ -77,14 +78,13 @@ export class PythonMergeService extends EventEmitter {
     try {
       // 检查Python脚本是否存在
       await fs.access(this.mergerScript);
-      await fs.access(this.configScript);
 
       // 检查Python可执行文件
       const result = await this._executePython(['-c', 'import sys; print(sys.version)']);
       this.logger.info(`Python环境验证成功: ${result.stdout.trim()}`);
 
       // 检查PyMuPDF依赖
-      await this._executePython(['-c', 'import fitz; print("PyMuPDF version:", fitz.version)']);
+      await this._executePython(['-c', 'import pymupdf; print("PyMuPDF version:", pymupdf.version)']);
       this.logger.info('PyMuPDF依赖验证成功');
 
       return true;
@@ -94,27 +94,6 @@ export class PythonMergeService extends EventEmitter {
         'ENVIRONMENT_VALIDATION_FAILED',
         { error: error.message }
       );
-    }
-  }
-
-  /**
-   * 验证配置文件
-   */
-  async validateConfig(configPath = 'config.json') {
-    try {
-      const result = await this._executePython([this.configScript, configPath]);
-
-      if (result.exitCode !== 0) {
-        throw new Error(result.stderr || '配置验证失败');
-      }
-
-      this.logger.info('配置文件验证成功');
-      return true;
-    } catch (error) {
-      throw new PythonMergeError(`配置验证失败: ${error.message}`, 'CONFIG_VALIDATION_FAILED', {
-        configPath,
-        error: error.message,
-      });
     }
   }
 
@@ -152,7 +131,12 @@ export class PythonMergeService extends EventEmitter {
       this.logger.info(`开始PDF合并任务: ${args.join(' ')}`);
 
       // 执行Python脚本
-      const result = await this._executePythonWithProgress(args);
+      this.mergeController = new AbortController();
+      this.currentRun = this._executePython(args, {
+        signal: this.mergeController.signal,
+        onStdout: (chunk) => this._parseProgress(chunk),
+      });
+      const result = await this.currentRun;
 
       // 解析结果
       const mergeResult = this._parseResult(result);
@@ -187,7 +171,8 @@ export class PythonMergeService extends EventEmitter {
       throw error;
     } finally {
       this.isRunning = false;
-      this.currentProcess = null;
+      this.mergeController = null;
+      this.currentRun = null;
     }
   }
 
@@ -229,33 +214,12 @@ export class PythonMergeService extends EventEmitter {
    * 停止当前运行的合并任务
    */
   async stopMerge() {
-    if (!this.isRunning || !this.currentProcess) {
-      return false;
-    }
-
-    try {
-      this.currentProcess.kill('SIGTERM');
-
-      // 等待进程结束
-      await new Promise((resolve) => {
-        this.currentProcess.on('exit', resolve);
-        // 5秒后强制结束
-        setTimeout(() => {
-          if (this.currentProcess) {
-            this.currentProcess.kill('SIGKILL');
-          }
-          resolve();
-        }, 5000);
-      });
-
-      this.emit('mergeStopped');
-      this.logger.info('PDF合并任务已停止');
-
-      return true;
-    } catch (error) {
-      this.logger.error(`停止PDF合并任务失败: ${error.message}`);
-      return false;
-    }
+    if (!this.mergeController) return false;
+    this.mergeController.abort();
+    await Promise.allSettled([this.currentRun]);
+    this.emit('mergeStopped');
+    this.logger.info('PDF合并任务已停止');
+    return true;
   }
 
   /**
@@ -293,133 +257,14 @@ export class PythonMergeService extends EventEmitter {
   /**
    * 执行Python脚本
    */
-  async _executePython(args) {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let timeoutHandle = null;
-
-      const process = spawn(this.pythonConfig.executable, args, {
-        encoding: this.pythonConfig.encoding,
-        timeout: this.pythonConfig.timeout,
-        maxBuffer: this.pythonConfig.maxBuffer,
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      process.stdout?.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      process.stderr?.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      process.on('close', (code) => {
-        if (!settled) {
-          settled = true;
-          if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
-          }
-          resolve({
-            exitCode: code,
-            stdout: stdout.trim(),
-            stderr: stderr.trim(),
-          });
-        }
-      });
-
-      process.on('error', (error) => {
-        if (!settled) {
-          settled = true;
-          if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
-          }
-          reject(
-            new PythonMergeError(
-              `Python进程执行失败: ${error.message}`,
-              'PYTHON_EXECUTION_FAILED',
-              { args, error: error.message }
-            )
-          );
-        }
-      });
-
-      // 处理超时
-      timeoutHandle = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          if (!process.killed) {
-            process.kill('SIGTERM');
-          }
-          reject(
-            new PythonMergeError('Python脚本执行超时', 'EXECUTION_TIMEOUT', {
-              args,
-              timeout: this.pythonConfig.timeout,
-            })
-          );
-        }
-      }, this.pythonConfig.timeout);
-    });
-  }
-
-  /**
-   * 执行Python脚本并监控进度
-   */
-  async _executePythonWithProgress(args) {
-    return new Promise((resolve, reject) => {
-      const process = spawn(this.pythonConfig.executable, args, {
-        encoding: this.pythonConfig.encoding,
-      });
-
-      this.currentProcess = process;
-      let stdout = '';
-      let stderr = '';
-
-      process.stdout?.on('data', (data) => {
-        const chunk = data.toString();
-        stdout += chunk;
-
-        // 解析进度信息
-        this._parseProgress(chunk);
-      });
-
-      process.stderr?.on('data', (data) => {
-        const chunk = data.toString();
-        stderr += chunk;
-        this.logger.debug(`Python stderr: ${chunk.trim()}`);
-      });
-
-      process.on('close', (code) => {
-        this.currentProcess = null;
-
-        if (code === 0) {
-          resolve({
-            exitCode: code,
-            stdout: stdout.trim(),
-            stderr: stderr.trim(),
-          });
-        } else {
-          reject(
-            new PythonMergeError(`Python脚本执行失败: 退出码 ${code}`, 'PYTHON_SCRIPT_FAILED', {
-              exitCode: code,
-              stdout: stdout.trim(),
-              stderr: stderr.trim(),
-              args,
-            })
-          );
-        }
-      });
-
-      process.on('error', (error) => {
-        this.currentProcess = null;
-        reject(
-          new PythonMergeError(`Python进程错误: ${error.message}`, 'PYTHON_PROCESS_ERROR', {
-            args,
-            error: error.message,
-          })
-        );
-      });
+  async _executePython(args, options = {}) {
+    return this.processRunner.run(this.pythonConfig.executable, args, {
+      timeoutMs: this.pythonConfig.timeout,
+      maxBuffer: this.pythonConfig.maxBuffer,
+      cwd: this.config.python?.cwd,
+      env: { ...process.env, ...this.config.python?.env },
+      failureLabel: 'Python execution failed',
+      ...options,
     });
   }
 
@@ -451,57 +296,16 @@ export class PythonMergeService extends EventEmitter {
    * 解析Python脚本结果
    */
   _parseResult(result) {
-    try {
-      // 尝试从输出中提取JSON结果
-      const jsonMatch = result.stdout.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
-      }
-
-      // 回退到解析文本输出
-      const lines = result.stdout.split('\n');
-      const mergedFiles = [];
-      let filesProcessed = 0;
-      let totalPages = 0;
-
-      for (const line of lines) {
-        if (line.includes('PDF saved as:') || line.includes('📄')) {
-          const fileMatch = line.match(/([^\s]+\.pdf)/);
-          if (fileMatch) {
-            mergedFiles.push(fileMatch[1]);
-          }
-        }
-
-        const fileCountMatch = line.match(/处理文件数:\s*(\d+)/);
-        if (fileCountMatch) {
-          filesProcessed = parseInt(fileCountMatch[1]);
-        }
-
-        const pageCountMatch = line.match(/总页数:\s*(\d+)/);
-        if (pageCountMatch) {
-          totalPages = parseInt(pageCountMatch[1]);
-        }
-      }
-
-      return {
-        success: result.exitCode === 0,
-        mergedFiles,
-        filesProcessed,
-        totalPages,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      };
-    } catch (error) {
-      this.logger.warning(`解析Python结果失败: ${error.message}`);
-      return {
-        success: result.exitCode === 0,
-        mergedFiles: [],
-        filesProcessed: 0,
-        totalPages: 0,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      };
+    const lines = result.stdout.trim().split('\n');
+    const parsed = JSON.parse(lines.at(-1));
+    if (parsed.success !== true || !Array.isArray(parsed.mergedFiles)
+        || parsed.mergedFiles.length === 0 || parsed.mergedFiles.some((file) => typeof file !== 'string' || !file)
+        || !Number.isInteger(parsed.filesProcessed)
+        || parsed.filesProcessed < 1 || !Number.isInteger(parsed.totalPages)
+        || parsed.totalPages < 1) {
+      throw new PythonMergeError('Invalid merge result', 'INVALID_RESULT', parsed);
     }
+    return parsed;
   }
 
   /**
@@ -533,6 +337,7 @@ export class PythonMergeService extends EventEmitter {
       await this.stopMerge();
     }
 
+    await this.processRunner.dispose();
     this.removeAllListeners();
     this.logger.info('Python合并服务已清理');
   }

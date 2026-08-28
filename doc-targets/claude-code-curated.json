@@ -9,7 +9,8 @@
   "ignoreURLs": [],
   "markdownSource": {
     "enabled": true,
-    "urlSuffix": ".md"
+    "urlSuffix": ".md",
+    "format": "mdx"
   },
   "sectionEntryPoints": [],
   "targetSections": [

@@ -1,3 +1,4 @@
+vi.mock('../../src/services/pdf/pdfVerification.js', () => ({ verifyPdf: vi.fn().mockResolvedValue({ passed: true, foundTitles: ['Guide'] }) }));
 import { describe, it, test, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 
 import fs from 'fs/promises';
@@ -7,24 +8,12 @@ import path from 'path';
 let mockCreateContainer;
 let mockShutdownContainer;
 let mockGetContainerHealth;
-let mockCheckPythonEnvironment;
-let mockPythonRunnerDispose;
-let mockGetRunningProcesses;
 let mockLogger;
 
 vi.mock('../../src/core/setup.js', () => ({
   createContainer: (...args) => mockCreateContainer(...args),
   shutdownContainer: (...args) => mockShutdownContainer(...args),
   getContainerHealth: (...args) => mockGetContainerHealth(...args),
-}));
-
-vi.mock('../../src/core/pythonRunner.js', () => ({
-  __esModule: true,
-  default: vi.fn(function MockPythonRunner() {
-    this.checkPythonEnvironment = (...args) => mockCheckPythonEnvironment(...args);
-    this.dispose = (...args) => mockPythonRunnerDispose(...args);
-    this.getRunningProcesses = (...args) => mockGetRunningProcesses(...args);
-  }),
 }));
 
 vi.mock('../../src/utils/logger.js', () => ({
@@ -34,6 +23,8 @@ vi.mock('../../src/utils/logger.js', () => ({
 import { Application } from '../../src/app.js';
 
 function createMockContainer(serviceMap) {
+  serviceMap.metadataService = { getArticleTitles: async () => ({ '0': 'Guide' }), getSectionStructure: async () => null };
+  serviceMap.processRunner = { dispose: vi.fn(), getRunningProcesses: vi.fn(() => []) };
   return {
     get: vi.fn(async (name) => {
       if (!(name in serviceMap)) {
@@ -56,13 +47,6 @@ describe('Application minimal workflow integration', () => {
     mockCreateContainer = vi.fn();
     mockShutdownContainer = vi.fn().mockResolvedValue();
     mockGetContainerHealth = vi.fn().mockReturnValue({ healthy: true, services: [] });
-    mockCheckPythonEnvironment = vi.fn().mockResolvedValue({
-      available: true,
-      version: 'Python 3.11.0',
-      executable: 'python3',
-    });
-    mockPythonRunnerDispose = vi.fn().mockResolvedValue();
-    mockGetRunningProcesses = vi.fn().mockReturnValue([]);
     mockLogger = {
       debug: vi.fn(),
       info: vi.fn(),
@@ -98,7 +82,7 @@ describe('Application minimal workflow integration', () => {
     const scraper = { run: vi.fn().mockResolvedValue() };
     const progressTracker = {
       start: vi.fn(),
-      getStats: vi.fn().mockReturnValue({ total: 1, completed: 1, failed: 0 }),
+      getStats: vi.fn().mockReturnValue({ total: 1, succeeded: 1, failed: 0 }),
     };
     const fileService = {
       ensureDirectory: vi.fn(async (dir) => {
@@ -108,7 +92,7 @@ describe('Application minimal workflow integration', () => {
     const pythonMergeService = {
       mergePDFs: vi.fn().mockResolvedValue({
         success: true,
-        outputFile: 'docs.pdf',
+        mergedFiles: ['docs.pdf'],
         processedFiles: 1,
       }),
     };
@@ -157,7 +141,7 @@ describe('Application minimal workflow integration', () => {
     const scraper = { run: vi.fn().mockResolvedValue() };
     const progressTracker = {
       start: vi.fn(),
-      getStats: vi.fn().mockReturnValue({ total: 2, completed: 2, failed: 0 }),
+      getStats: vi.fn().mockReturnValue({ total: 2, succeeded: 2, failed: 0 }),
     };
     const fileService = {
       ensureDirectory: vi.fn(async (dir) => {
@@ -216,7 +200,7 @@ describe('Application minimal workflow integration', () => {
     const scraper = { run: vi.fn().mockResolvedValue() };
     const progressTracker = {
       start: vi.fn(),
-      getStats: vi.fn().mockReturnValue({ total: 2, completed: 2, failed: 0 }),
+      getStats: vi.fn().mockReturnValue({ total: 2, succeeded: 2, failed: 0 }),
     };
     const fileService = {
       ensureDirectory: vi.fn(async (dir) => {

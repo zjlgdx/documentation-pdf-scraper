@@ -47,10 +47,21 @@ export class BrowserPool extends EventEmitter {
    * 初始化浏览器池
    */
   async initialize() {
+    if (this.isClosed) throw new Error('浏览器池已关闭');
     if (this.isInitialized) {
       this.logger?.warn('浏览器池已经初始化');
       return;
     }
+
+    if (!this.initialization) {
+      this.initialization = this._initialize().finally(() => {
+        this.initialization = null;
+      });
+    }
+    return this.initialization;
+  }
+
+  async _initialize() {
 
     try {
       this.logger?.info('开始初始化浏览器池', {
@@ -153,13 +164,12 @@ export class BrowserPool extends EventEmitter {
    * 获取可用的浏览器实例
    */
   async getBrowser() {
-    if (!this.isInitialized) {
-      throw new Error('浏览器池未初始化');
-    }
-
     if (this.isClosed) {
       throw new Error('浏览器池已关闭');
     }
+
+    if (!this.isInitialized) await this.initialize();
+    if (this.isClosed) throw new Error('浏览器池已关闭');
 
     this.stats.totalRequests++;
     this.stats.activeRequests++;
@@ -407,6 +417,9 @@ export class BrowserPool extends EventEmitter {
 
     this.isClosed = true;
     this.logger?.info('开始关闭浏览器池');
+
+    // A lazy launch may still be in flight. Close its result as well.
+    if (this.initialization) await Promise.allSettled([this.initialization]);
 
     // 关闭所有浏览器实例
     const closePromises = this.browsers.map(async (browser) => {

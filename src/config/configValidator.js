@@ -135,10 +135,10 @@ const configSchema = Joi.object({
     ),
 
   navigationStrategy: Joi.string()
-    .valid('domcontentloaded', 'networkidle2', 'networkidle0', 'load', 'auto')
-    .default('auto')
+    .valid('domcontentloaded', 'networkidle2', 'networkidle0', 'load')
+    .default('domcontentloaded')
     .description(
-      'Preferred navigation wait strategy - "auto" uses default fallback order (domcontentloaded→networkidle2→networkidle0→load), specific strategy (e.g., "load") tries that first for better performance on SPAs'
+      'Navigation wait strategy; errors never switch to another strategy'
     ),
 
   urlCollectionWaitUntil: Joi.string()
@@ -433,27 +433,6 @@ const configSchema = Joi.object({
     .default()
     .description('State management settings'),
 
-  // 监控和日志配置
-  monitoring: Joi.object({
-    enabled: Joi.boolean().default(true).description('Enable monitoring and metrics'),
-
-    progressInterval: Joi.number()
-      .integer()
-      .min(1000)
-      .default(10000)
-      .description('Progress reporting interval (ms)'),
-
-    memoryThreshold: Joi.number()
-      .integer()
-      .min(100)
-      .default(1000)
-      .description('Memory usage warning threshold (MB)'),
-
-    logMetrics: Joi.boolean().default(true).description('Log performance metrics'),
-  })
-    .default()
-    .description('Monitoring settings'),
-
   // 网络配置
   network: Joi.object({
     userAgent: Joi.string().optional().description('Custom user agent string'),
@@ -502,15 +481,13 @@ const configSchema = Joi.object({
   markdownPdf: Joi.object({
     enabled: Joi.boolean()
       .default(false)
-      .description('Use md-to-pdf instead of Puppeteer for PDF generation'),
+      .description('Use Pandoc/XeLaTeX for PDF generation'),
 
     batchMode: Joi.boolean()
       .default(false)
       .description(
         'When true, skip individual PDF generation and create final PDF directly from all markdown files'
       ),
-
-    stylesheet: Joi.string().optional().description('Custom CSS stylesheet for md-to-pdf'),
 
     highlightStyle: Joi.string()
       .default('github')
@@ -530,14 +507,14 @@ const configSchema = Joi.object({
       .description('Maximum heading depth for table of contents'),
 
     pdfOptions: Joi.object({
-      format: Joi.string().default('A4').description('PDF page format for md-to-pdf'),
+      format: Joi.string().default('A4').description('PDF page format for Pandoc'),
       margin: Joi.alternatives()
         .try(Joi.string(), Joi.object())
         .optional()
-        .description('PDF margins passed to md-to-pdf'),
+        .description('PDF margins passed to Pandoc'),
     })
       .default({ format: 'A4' })
-      .description('Additional pdf_options for md-to-pdf'),
+      .description('Additional pdf_options for Pandoc'),
   })
     .default()
     .description('Markdown to PDF settings'),
@@ -547,6 +524,9 @@ const configSchema = Joi.object({
     enabled: Joi.boolean()
       .default(false)
       .description('Fetch markdown source directly by appending urlSuffix to page URL'),
+
+    format: Joi.string().valid('markdown', 'mdx').default('markdown')
+      .description('Source grammar; MDX parsing errors are fatal'),
 
     urlSuffix: Joi.string()
       .min(1)
@@ -629,6 +609,15 @@ const configSchema = Joi.object({
   })
     .default()
     .description('Translation settings'),
+}).custom((value, helpers) => {
+  if (value.markdownPdf.enabled && !value.markdown.enabled) {
+    return helpers.message({ custom: 'markdownPdf.enabled requires markdown.enabled' });
+  }
+  if ((value.markdownSource.enabled || value.markdownPdf.batchMode)
+      && !(value.markdown.enabled && value.markdownPdf.enabled)) {
+    return helpers.message({ custom: 'markdownSource and batchMode require the Markdown/Pandoc workflow' });
+  }
+  return value;
 });
 
 /**

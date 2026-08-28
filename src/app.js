@@ -1,7 +1,7 @@
 import path from 'path';
 import { createContainer, shutdownContainer, getContainerHealth } from './core/setup.js';
-import PythonRunner from './core/pythonRunner.js';
 import { createLogger } from './utils/logger.js';
+import { verifyPdf } from './services/pdf/pdfVerification.js';
 
 /**
  * 主应用程序类
@@ -13,7 +13,7 @@ class Application {
 
     this.container = null;
     this.logger = createLogger('Application');
-    this.pythonRunner = null;
+    this.processRunner = null;
     this.isShuttingDown = false;
     this.startTime = null;
     this.processRef = processRef;
@@ -65,22 +65,7 @@ class Application {
       this.logger.info('📦 Setting up dependency injection container...');
       this.container = await createContainer();
 
-      // 2. 获取配置和服务
-      const config = await this.container.get('config');
-      const appLogger = await this.container.get('logger');
-
-      // 3. 初始化Python运行器
-      this.pythonRunner = new PythonRunner(config, appLogger);
-
-      // 4. 检查Python环境（可选）
-      this.logger.info('🐍 Checking Python environment...');
-      const pythonCheck = await this.pythonRunner.checkPythonEnvironment();
-      if (!pythonCheck.available) {
-        this.logger.warn('⚠️ Python environment not available:', pythonCheck.error);
-        this.logger.warn('📄 PDF merge functionality will be limited');
-      } else {
-        this.logger.info('✅ Python environment ready:', pythonCheck.version);
-      }
+      this.processRunner = await this.container.get('processRunner');
 
       // 5. 验证容器健康状态
       const health = getContainerHealth(this.container);
@@ -119,21 +104,18 @@ class Application {
 
       // 获取爬虫统计信息
       const stats = progressTracker.getStats();
-      const normalizedStats = {
-        ...stats,
-        succeeded: stats.succeeded ?? stats.completed ?? 0,
-      };
+      if (stats.failed > 0) throw new Error(`${stats.failed} documentation pages failed`);
       const scrapeTime = Date.now() - scrapeStartTime;
 
       this.logger.info('✅ Web scraping completed successfully', {
         duration: scrapeTime,
-        stats: normalizedStats,
+        stats,
       });
 
       return {
         success: true,
         duration: scrapeTime,
-        stats: normalizedStats,
+        stats,
       };
     } catch (error) {
       this.logger.error('❌ Web scraping failed:', error);
@@ -154,16 +136,14 @@ class Application {
 
       const pythonMergeService = await this.container.get('pythonMergeService');
 
-      // 动态获取依赖
-      const fs = await import('fs/promises');
-      const path = await import('path');
+      const fs = await import('node:fs/promises');
       const config = await this.container.get('config');
-      const pdfDir = config.pdfDir || 'pdfs';
 
       // 为 Python 合并生成完整配置文件（config.json 仅保留公共配置，doc-target 在运行时合并）
       const tempDirectory = path.resolve(config.output?.tempDirectory || '.temp');
       const rootDir = path.resolve(process.cwd());
-      if (!tempDirectory.startsWith(rootDir)) {
+      const relativeTemp = path.relative(rootDir, tempDirectory);
+      if (relativeTemp.startsWith('..') || path.isAbsolute(relativeTemp)) {
         throw new Error(`Unsafe temp directory: ${tempDirectory}`);
       }
 
@@ -175,34 +155,11 @@ class Application {
       );
       await fs.writeFile(mergedConfigPath, JSON.stringify(config, null, 2), 'utf8');
 
-      // 查找PDF源目录（排除finalPdf和metadata）
-      let targetDirectory = null;
-      try {
-        const items = await fs.readdir(pdfDir);
-        for (const item of items) {
-          const itemPath = path.join(pdfDir, item);
-          const stat = await fs.stat(itemPath);
-          if (
-            stat.isDirectory() &&
-            !item.startsWith('finalPdf') &&
-            item !== 'metadata' &&
-            item !== '.temp'
-          ) {
-            targetDirectory = item;
-            break;
-          }
-        }
-      } catch (error) {
-        this.logger.warn('无法读取PDF目录，使用默认合并方式', { error: error.message });
-      }
-
       // 使用新的Python合并服务
       let result;
       try {
         result = await pythonMergeService.mergePDFs(
-          targetDirectory
-            ? { directory: targetDirectory, config: mergedConfigPath }
-            : { config: mergedConfigPath }
+          { config: mergedConfigPath }
         );
       } finally {
         try {
@@ -217,8 +174,8 @@ class Application {
       if (result.success) {
         this.logger.info('✅ PDF merge completed successfully', {
           duration: mergeTime,
-          outputFile: result.outputFile,
-          processedFiles: result.processedFiles,
+          outputFiles: result.mergedFiles,
+          processedFiles: result.filesProcessed,
         });
       } else {
         this.logger.error('❌ PDF merge failed:', result.error);
@@ -326,6 +283,8 @@ class Application {
         );
       }
 
+      const pdfPaths = useBatchMode ? [mergeResult.outputPath] : mergeResult.mergedFiles;
+      const verification = await this.runPdfVerification(pdfPaths, config);
       const totalTime = Date.now() - totalStartTime;
 
       // 生成最终报告
@@ -333,6 +292,7 @@ class Application {
         totalDuration: totalTime,
         scraping: scrapeResult,
         merge: mergeResult,
+        verification,
         batchMode: useBatchMode,
         timestamp: new Date().toISOString(),
       };
@@ -346,6 +306,31 @@ class Application {
     }
   }
 
+  async runPdfVerification(pdfPaths, config) {
+    if (!Array.isArray(pdfPaths) || !pdfPaths.length || pdfPaths.some((file) => !file)) {
+      throw new Error('PDF generation returned no output paths');
+    }
+    const metadata = await this.container.get('metadataService');
+    const titles = Object.values(await metadata.getArticleTitles());
+    const structure = await metadata.getSectionStructure();
+    const results = [];
+    for (const pdfPath of pdfPaths) {
+      results.push(await verifyPdf(pdfPath, {
+        config, processRunner: this.processRunner,
+        expectations: {
+          candidateTitles: titles,
+          groups: config.markdownPdf?.batchMode
+            ? (structure?.sections || []).map((section) => section.title) : [],
+        },
+      }));
+    }
+    const foundTitles = new Set(results.flatMap((result) => result.foundTitles));
+    const missingTitles = titles.filter((title) => !foundTitles.has(title));
+    if (missingTitles.length) throw new Error(`PDFs are missing article titles: ${missingTitles.join(', ')}`);
+    this.logger.info('PDF 自动检查通过；页面预览仍需人工检查', { results });
+    return results;
+  }
+
   /**
    * 获取应用程序状态
    */
@@ -357,7 +342,7 @@ class Application {
       uptime,
       startTime: this.startTime,
       containerHealth: this.container ? getContainerHealth(this.container) : null,
-      pythonProcesses: this.pythonRunner ? this.pythonRunner.getRunningProcesses() : [],
+      processes: this.processRunner ? this.processRunner.getRunningProcesses() : [],
       memoryUsage: this.processRef.memoryUsage(),
       pid: this.processRef.pid,
     };
@@ -375,10 +360,10 @@ class Application {
     this.logger.info('🧹 Starting application cleanup...');
 
     try {
-      // 1. 停止Python进程
-      if (this.pythonRunner) {
-        await this.pythonRunner.dispose();
-        this.pythonRunner = null;
+      // Stop all external commands before disposing their services.
+      if (this.processRunner) {
+        await this.processRunner.dispose();
+        this.processRunner = null;
       }
 
       // 2. 关闭容器和所有服务
@@ -420,16 +405,11 @@ class Application {
   async healthCheck() {
     try {
       const status = this.getStatus();
-      const pythonCheck = this.pythonRunner
-        ? await this.pythonRunner.checkPythonEnvironment()
-        : null;
-
       return {
         healthy: true,
         status: status.status,
         uptime: status.uptime,
         containerHealth: status.containerHealth,
-        pythonEnvironment: pythonCheck,
         timestamp: new Date().toISOString(),
       };
     } catch (error) {

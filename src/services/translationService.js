@@ -280,7 +280,6 @@ export class TranslationService {
         // 使用 p-limit 控制并发，并为每个批次提供重试
         const limit = pLimit(this.concurrency || 1);
         let completedBatches = 0;
-        let failedBatches = 0;
 
         const tasks = batches.map((batch, batchIndex) =>
           limit(async () => {
@@ -292,18 +291,10 @@ export class TranslationService {
             try {
               // 为每个批次添加独立的超时保护
               const batchTimeout = this.timeoutMs || 60000;
-              const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                  () =>
-                    reject(
-                      new Error(`DOM batch ${batchIndex + 1} timeout after ${batchTimeout}ms`)
-                    ),
-                  batchTimeout
-                );
-              });
-
-              const translatePromise = this._translateBatchWithRetry(batch);
-              const res = await Promise.race([translatePromise, timeoutPromise]);
+              const res = await this._withTimeout(
+                this._translateBatchWithRetry(batch), batchTimeout,
+                `DOM batch ${batchIndex + 1} timeout after ${batchTimeout}ms`
+              );
 
               if (res) {
                 const cacheWriteTasks = [];
@@ -323,7 +314,6 @@ export class TranslationService {
                 progress: `${completedBatches}/${batches.length}`,
               });
             } catch (err) {
-              failedBatches++;
               this.logger.error(
                 `DOM batch ${batchIndex + 1}/${batches.length} failed after retries`,
                 {
@@ -341,30 +331,12 @@ export class TranslationService {
 
         // 为整个批处理过程添加总超时
         const totalTimeout = (this.timeoutMs || 60000) * batches.length;
-        const totalTimeoutPromise = new Promise((_, reject) => {
-          setTimeout(
-            () => reject(new Error(`Total DOM translation timeout after ${totalTimeout}ms`)),
-            totalTimeout
-          );
-        });
-
-        try {
-          await Promise.race([Promise.all(tasks), totalTimeoutPromise]);
-          this.logger.info('All DOM translation batches completed', {
-            completed: completedBatches,
-            failed: failedBatches,
-            total: batches.length,
-          });
-        } catch (err) {
-          this.logger.warn('DOM translation batches did not complete in time', {
-            error: err.message,
-            completed: completedBatches,
-            failed: failedBatches,
-            total: batches.length,
-          });
-          // 即使超时，也继续处理已完成的翻译
-        }
+        await this._withTimeout(Promise.all(tasks), totalTimeout,
+          `Total DOM translation timeout after ${totalTimeout}ms`);
       }
+
+      const missing = elementsToTranslate.filter((item) => typeof cachedTranslations[item.id] !== 'string');
+      if (missing.length) throw new Error(`Missing translations for ${missing.length} DOM elements`);
 
       // 4. Apply all translations (cached + new)
       if (Object.keys(cachedTranslations).length > 0) {
@@ -396,6 +368,7 @@ export class TranslationService {
       this.logger.info('Translation completed');
     } catch (error) {
       this.logger.error('Translation failed', { error: error.message });
+      throw error;
     }
   }
 
@@ -636,10 +609,11 @@ export class TranslationService {
         const result = await this._translateBatchWithRetry(uncachedCaptions);
         await this._cacheTranslationResults(uncachedCaptions, result, translations);
       } catch (error) {
-        this.logger.warn('Image caption translation failed, will use original captions', {
+        this.logger.warn('Image caption translation failed', {
           error: error.message,
           count: uncachedCaptions.length,
         });
+        throw error;
       }
     }
 
@@ -708,7 +682,14 @@ export class TranslationService {
 
     await this._translateMarkdownSegments(uncachedSegments, translations);
 
+    const missing = plan.segments.filter((segment) => typeof translations[segment.id] !== 'string');
+    if (missing.length) throw new Error(`Missing translations for ${missing.length} Markdown segments`);
+
     await this._translateImageCaptions(plan.imageCaptions);
+    if (this.bilingual && plan.imageCaptions.some((caption) => caption.altText
+      && typeof caption.translated !== 'string')) {
+      throw new Error('Missing translations for image captions');
+    }
     return this._renderTranslatedMarkdown(plan, translations);
   }
 

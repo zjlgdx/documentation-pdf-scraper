@@ -52,6 +52,28 @@ describe('BrowserPool', () => {
   });
 
   describe('constructor', () => {
+    it('closes browsers whose lazy launch finishes during shutdown', async () => {
+      let finishLaunch;
+      const browser = createMockBrowser();
+      browserPool.options.maxBrowsers = 1;
+      puppeteer.launch.mockReturnValue(new Promise((resolve) => { finishLaunch = resolve; }));
+      const request = browserPool.getBrowser();
+      const rejected = expect(request).rejects.toThrow('浏览器池已关闭');
+      const closing = browserPool.close();
+      finishLaunch(browser);
+      await Promise.all([closing, rejected]);
+      expect(browser.close).toHaveBeenCalledOnce();
+      expect(browserPool.browsers).toEqual([]);
+      await expect(browserPool.initialize()).rejects.toThrow('浏览器池已关闭');
+    });
+    it('initializes the pool once when concurrent callers first request browsers', async () => {
+      const browsers = await Promise.all([browserPool.getBrowser(), browserPool.getBrowser()]);
+      expect(puppeteer.launch).toHaveBeenCalledTimes(2);
+      expect(new Set(browsers).size).toBe(2);
+      expect(browserPool.isInitialized).toBe(true);
+      browsers.forEach((browser) => browserPool.releaseBrowser(browser));
+      await browserPool.close();
+    });
     it('should initialize with default options', () => {
       const pool = new BrowserPool();
 
@@ -191,10 +213,13 @@ describe('BrowserPool', () => {
       expect(browserPool.stats.activeRequests).toBe(1);
     });
 
-    it('should throw if not initialized', async () => {
+    it('should lazily initialize if needed', async () => {
       const pool = new BrowserPool();
 
-      await expect(pool.getBrowser()).rejects.toThrow('浏览器池未初始化');
+      const browser = await pool.getBrowser();
+      expect(pool.isInitialized).toBe(true);
+      pool.releaseBrowser(browser);
+      await pool.close();
     });
 
     it('should throw if closed', async () => {

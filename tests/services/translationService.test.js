@@ -96,6 +96,21 @@ describe('TranslationService', () => {
     expect(piService._getCacheKey(text)).not.toBe(key1);
   });
 
+  test('rejects incomplete Markdown translation instead of publishing original segments', async () => {
+    const service = createService({ config: baseConfig, logger });
+    vi.spyOn(service, '_translateBatchWithRetry').mockResolvedValue({});
+    await expect(service.translateMarkdown('A paragraph requiring translation.'))
+      .rejects.toThrow('Missing translations');
+  });
+
+  test('rejects incomplete DOM translation before changing the page', async () => {
+    const service = createService({ config: baseConfig, logger });
+    vi.spyOn(service, '_translateBatchWithRetry').mockResolvedValue({});
+    const page = { evaluate: vi.fn().mockResolvedValue([{ id: '1', text: 'Translate this paragraph' }]) };
+    await expect(service.translatePage(page)).rejects.toThrow('Missing translations');
+    expect(page.evaluate).toHaveBeenCalledOnce();
+  });
+
   test('_saveToCache 和 _getFromCache 应该能正确读写缓存', async () => {
     const service = createService({ config: baseConfig, logger });
     const text = 'Some text';

@@ -8,9 +8,6 @@ dependencies = [
   "Pillow>=10.4.0,<11.0.0",
   "CairoSVG>=2.9.0,<3.0.0",
   "psutil>=5.9.0",
-  "jsonschema>=4.17.0",
-  "pathlib2>=2.3.7",
-  "typing-extensions>=4.5.0",
 ]
 
 [tool.uv]

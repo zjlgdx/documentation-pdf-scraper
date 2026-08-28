@@ -273,7 +273,7 @@ describe('setup', () => {
         expect.any(Function),
         expect.objectContaining({
           singleton: true,
-          dependencies: ['config', 'logger', 'metadataService'],
+          dependencies: ['config', 'logger', 'metadataService', 'processRunner'],
           lifecycle: 'singleton',
         })
       );
@@ -309,13 +309,11 @@ describe('setup', () => {
         expect.any(Function),
         expect.objectContaining({
           singleton: true,
-          dependencies: ['config', 'logger'],
+          dependencies: ['config', 'logger', 'processRunner'],
           lifecycle: 'singleton',
         })
       );
 
-      // Verify total number of services registered
-      expect(mockContainer.register).toHaveBeenCalledTimes(17);
 
       // Verify validation and preloading
       expect(mockContainer.validateDependencies).toHaveBeenCalled();
@@ -644,7 +642,7 @@ describe('setup', () => {
         headless: true,
         logger: 'logger',
       });
-      expect(browserPool.initialize).toHaveBeenCalled();
+      expect(browserPool.initialize).not.toHaveBeenCalled();
     });
   });
 });

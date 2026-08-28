@@ -17,6 +17,8 @@ help:
 	@echo "  run           - Generate PDF documentation"
 	@echo "  run-clean     - Clean output and generate PDF documentation"
 	@echo "  test          - Run tests"
+	@echo "  pdf-smoke     - Generate and verify the fixed PDF layout fixture"
+	@echo "  verify-pdf PDF=<path> - Check a PDF and render review previews"
 	@echo "  lint          - Run linter"
 	@echo "  verify-openclaw - Verify openclaw zh-CN targetUrls coverage against sitemap"
 	@echo "  ci            - Run CI checks (test + lint + verify-openclaw-ci)"
@@ -101,6 +103,14 @@ run-clean:
 test:
 	@echo "Running tests..."
 	npm test
+	$(UV_PYTHON) -m unittest discover -s tests/python -v
+
+.PHONY: pdf-smoke verify-pdf
+pdf-smoke:
+	node scripts/pdf-smoke.js
+
+verify-pdf:
+	node scripts/verify-pdf.js "$(PDF)"
 
 # Run linter
 lint:
