@@ -23,7 +23,7 @@ help:
 	@echo "  verify-openclaw - Verify openclaw zh-CN targetUrls coverage against sitemap"
 	@echo "  ci            - Run CI checks (test + lint + verify-openclaw-ci)"
 	@echo "  clean         - Clean generated PDFs and metadata"
-	@echo "  clean-cache   - Clean translation cache and metadata (keep PDFs)"
+	@echo "  clean-cache   - Clean HTTP/translation/annotation caches and metadata (keep PDFs)"
 	@echo "  clean-all     - Clean everything including dependencies"
 	@echo ""
 	@echo "Kindle PDF optimization:"
@@ -153,7 +153,7 @@ clean:
 
 # Clean caches and metadata without removing generated PDFs
 clean-cache:
-	@echo "Cleaning default HTTP/translation caches and metadata (keeping PDFs)..."
+	@echo "Cleaning default HTTP/translation/annotation caches and metadata (keeping PDFs)..."
 	rm -rf .cache/http
 	rm -rf .temp
 	rm -rf pdfs/metadata/*

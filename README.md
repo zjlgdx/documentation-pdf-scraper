@@ -8,6 +8,7 @@ A professional web scraper and PDF generator that converts documentation website
     - 🕷️ **Web Scraper**: Intelligent crawling of documentation sites using Puppeteer.
     - 📄 **Batch Markdown**: Direct high-fidelity PDF generation from local Markdown files.
 - **Device Optimization**: Specialized layout presets for Kindle (7", Paperwhite, Oasis, Scribe).
+- **Level-aware English Annotations**: Keeps English source text and adds restrained Chinese learning notes through subscription OAuth CLIs.
 - **Multi-Target Support**: Built-in configs for common docs (OpenAI, Claude, Anthropic) + custom targets.
 - **Smart Formatting**:
     - Preserves original styling while ensuring readability.
@@ -123,10 +124,40 @@ means one final Pandoc PDF is built after collection; it does not skip scraping.
 - `markdown.enabled=true` and `markdownPdf.enabled=true`: use Pandoc/XeLaTeX.
   With both disabled, use Puppeteer printing and Python merging.
 
-Source, parser, translation, image conversion and renderer errors are reported;
+Source, parser, translation, annotation, image conversion and renderer errors are reported;
 the workflow never switches to another source or PDF engine. A failed page stops
-final PDF generation after configured retries. With translation disabled, only
-one Markdown file is written; translated output is selected only when enabled.
+final PDF generation after configured retries. The original Markdown is always
+retained. Translation selects `_translated.md`; English learning annotations select
+`_annotated.md` and preserve the original paragraph text.
+
+### English learning annotations
+
+Annotations require the Markdown/Pandoc workflow and are mutually exclusive with
+full translation in V1. They use existing subscription OAuth sessions: AGY with
+Gemini Flash is primary, while Codex Luna `xhigh` is tried once only when the
+primary process or deterministic response validation fails. No API key is stored.
+
+```json
+{
+  "annotations": {
+    "enabled": true,
+    "level": "high-school",
+    "density": "standard",
+    "provider": "agy",
+    "model": "gemini-3.7-flash-high",
+    "fallback": {
+      "provider": "codex",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "xhigh"
+    }
+  }
+}
+```
+
+`level` accepts `junior-high`, `high-school`, or `university`; `density` accepts
+`light`, `standard`, or `dense`. Paragraphs, code, links, tables, headings and
+frontmatter remain byte-for-byte unchanged; generated notes are adjacent Markdown
+blockquotes. Valid empty annotations are accepted and do not invoke the fallback.
 
 ### PDF verification
 

@@ -27,6 +27,7 @@ export class Scraper extends EventEmitter {
     this.imageService = dependencies.imageService;
     this.pdfStyleService = dependencies.pdfStyleService;
     this.translationService = dependencies.translationService;
+    this.annotationService = dependencies.annotationService;
     this.markdownService = dependencies.markdownService;
     this.markdownToPdfService = dependencies.markdownToPdfService;
     this.httpResourceService = dependencies.httpResourceService || new HttpResourceService({ config: this.config, logger: this.logger });
@@ -40,6 +41,7 @@ export class Scraper extends EventEmitter {
 
     this.logger.info('Scraper constructor called', {
       hasTranslationService: !!this.translationService,
+      hasAnnotationService: !!this.annotationService,
     });
 
     // 绑定事件处理
@@ -1007,13 +1009,12 @@ export class Scraper extends EventEmitter {
       url,
       index,
     });
-    const translatedMarkdown = this.config.translation?.enabled
-      ? await this.translationService.translateMarkdown(markdownWithFrontmatter)
-      : markdownWithFrontmatter;
+    const { outputMarkdown, variant } = await this._deriveMarkdownOutput(markdownWithFrontmatter);
     const markdownPath = await this._writeMarkdownArtifacts({
       pdfPath,
       markdownWithFrontmatter,
-      translatedMarkdown,
+      outputMarkdown,
+      variant,
     });
 
     if (this.config.markdownPdf?.batchMode) {
@@ -1025,7 +1026,7 @@ export class Scraper extends EventEmitter {
     }
 
     await this.markdownToPdfService.convertContentToPdf(
-      translatedMarkdown,
+      outputMarkdown,
       pdfPath,
       { ...this.config.markdownPdf, sourceUrl: url }
     );
@@ -1058,7 +1059,24 @@ export class Scraper extends EventEmitter {
     };
   }
 
-  async _writeMarkdownArtifacts({ pdfPath, markdownWithFrontmatter, translatedMarkdown }) {
+  async _deriveMarkdownOutput(markdownWithFrontmatter) {
+    if (this.config.translation?.enabled) {
+      return {
+        outputMarkdown: await this.translationService.translateMarkdown(markdownWithFrontmatter),
+        variant: 'translated',
+      };
+    }
+    if (this.config.annotations?.enabled) {
+      if (!this.annotationService) throw new ValidationError('Annotation service is unavailable');
+      return {
+        outputMarkdown: await this.annotationService.annotateMarkdown(markdownWithFrontmatter),
+        variant: 'annotated',
+      };
+    }
+    return { outputMarkdown: markdownWithFrontmatter, variant: 'original' };
+  }
+
+  async _writeMarkdownArtifacts({ pdfPath, markdownWithFrontmatter, outputMarkdown, variant }) {
     const markdownOutputDir = path.join(
       this.config.pdfDir,
       this.config.markdown?.outputDir || 'markdown'
@@ -1066,11 +1084,16 @@ export class Scraper extends EventEmitter {
     const baseName = path.basename(pdfPath, '.pdf');
     const originalMarkdownPath = path.join(markdownOutputDir, `${baseName}.md`);
     const translatedMarkdownPath = path.join(markdownOutputDir, `${baseName}_translated.md`);
+    const annotatedMarkdownPath = path.join(markdownOutputDir, `${baseName}_annotated.md`);
 
     await this.fileService.writeText(originalMarkdownPath, markdownWithFrontmatter);
-    if (this.config.translation?.enabled) {
-      await this.fileService.writeText(translatedMarkdownPath, translatedMarkdown);
+    if (variant === 'translated') {
+      await this.fileService.writeText(translatedMarkdownPath, outputMarkdown);
       return translatedMarkdownPath;
+    }
+    if (variant === 'annotated') {
+      await this.fileService.writeText(annotatedMarkdownPath, outputMarkdown);
+      return annotatedMarkdownPath;
     }
     return originalMarkdownPath;
   }

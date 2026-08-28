@@ -1,6 +1,7 @@
 // src/services/stateManager.js
 import { EventEmitter } from 'events';
 import { createHash } from 'node:crypto';
+import { ANNOTATION_CONTRACT_VERSION } from './annotationContract.js';
 
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -254,7 +255,7 @@ export class StateManager extends EventEmitter {
   }
 
   /** A checkpoint belongs to one ordered selection and acquisition configuration. */
-  async prepareRun(urls, config) {
+  async prepareRun(urls, config, options = {}) {
     await this.savePromise;
     const acquisition = { ...config };
     for (const key of ['_runtime', 'logLevel', 'concurrency', 'network', 'queue', 'state',
@@ -262,6 +263,12 @@ export class StateManager extends EventEmitter {
     if (config.markdown?.enabled && config.markdownPdf?.enabled && config.markdownPdf.batchMode) {
       delete acquisition.pdf;
       acquisition.markdownPdf = { enabled: true, batchMode: true };
+    }
+    if (acquisition.annotations?.enabled) {
+      acquisition.annotations = {
+        ...acquisition.annotations,
+        contractVersion: options.annotationContractVersion || ANNOTATION_CONTRACT_VERSION,
+      };
     }
     const identity = createHash('sha256').update(stableJson({ version: 1, urls, acquisition })).digest('hex');
     const resumed = this.runIdentity === identity;

@@ -331,4 +331,22 @@ describe('PathService', () => {
       );
     });
   });
+
+  describe('getAnnotationCacheDirectory', () => {
+    test('应该在临时目录下生成批注缓存目录', () => {
+      const dir = pathService.getAnnotationCacheDirectory();
+      expect(dir).toBe(path.join(path.resolve('.temp'), 'annotation_cache'));
+    });
+
+    test('应该拒绝越界的批注缓存目录', () => {
+      const unsafeService = new PathService({
+        pdfDir: '/home/user/pdfs',
+        output: { tempDirectory: '/../outside' },
+      });
+
+      expect(() => unsafeService.getAnnotationCacheDirectory()).toThrow(
+        'Unsafe annotation cache directory'
+      );
+    });
+  });
 });

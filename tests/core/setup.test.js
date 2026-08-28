@@ -74,6 +74,9 @@ vi.mock('../../src/services/pdfStyleService.js', () => ({
 vi.mock('../../src/services/translationService.js', () => ({
   TranslationService: vi.fn(),
 }));
+vi.mock('../../src/services/annotationService.js', () => ({
+  AnnotationService: vi.fn(),
+}));
 vi.mock('../../src/services/markdownService.js', () => ({
   MarkdownService: vi.fn(),
 }));
@@ -259,6 +262,16 @@ describe('setup', () => {
       );
 
       expect(mockContainer.register).toHaveBeenCalledWith(
+        'annotationService',
+        expect.any(Function),
+        expect.objectContaining({
+          singleton: true,
+          dependencies: ['config', 'pathService', 'logger', 'processRunner'],
+          lifecycle: 'singleton',
+        })
+      );
+
+      expect(mockContainer.register).toHaveBeenCalledWith(
         'markdownService',
         expect.any(Function),
         expect.objectContaining({
@@ -297,6 +310,7 @@ describe('setup', () => {
             'imageService',
             'pdfStyleService',
             'translationService',
+            'annotationService',
             'markdownService',
             'markdownToPdfService',
             'httpResourceService',
@@ -464,6 +478,25 @@ describe('setup', () => {
         logger: mockLoggerService,
       });
 
+      // Test annotationService factory
+      const annotationServiceFactory = mockContainer.register.mock.calls.find(
+        (call) => call[0] === 'annotationService'
+      )[1];
+      const { AnnotationService } = await import('../../src/services/annotationService.js');
+      const mockProcessRunner = { run: vi.fn() };
+      annotationServiceFactory(
+        { annotations: { enabled: true } },
+        mockPathService,
+        mockLoggerService,
+        mockProcessRunner
+      );
+      expect(AnnotationService).toHaveBeenCalledWith({
+        config: { annotations: { enabled: true } },
+        pathService: mockPathService,
+        logger: mockLoggerService,
+        processRunner: mockProcessRunner,
+      });
+
       // Test markdownService factory
       const markdownServiceFactory = mockContainer.register.mock.calls.find(
         (call) => call[0] === 'markdownService'
@@ -508,6 +541,7 @@ describe('setup', () => {
         'imageService',
         'pdfStyleService',
         'translationService',
+        'annotationService',
         'markdownService',
         'markdownToPdfService',
         'httpResourceService',
@@ -528,6 +562,7 @@ describe('setup', () => {
         imageService: 'imageService',
         pdfStyleService: 'pdfStyleService',
         translationService: 'translationService',
+        annotationService: 'annotationService',
         markdownService: 'markdownService',
         markdownToPdfService: 'markdownToPdfService',
         httpResourceService: 'httpResourceService',

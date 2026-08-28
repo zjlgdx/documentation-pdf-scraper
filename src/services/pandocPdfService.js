@@ -672,14 +672,21 @@ export class PandocPdfService {
     }
 
     const originals = fs.readdirSync(dir)
-      .filter((file) => file.endsWith('.md') && !file.endsWith('_translated.md'));
+      .filter((file) => file.endsWith('.md')
+        && !file.endsWith('_translated.md')
+        && !file.endsWith('_annotated.md'));
     const files = originals.map((file) => {
-      if (!this.config.translation?.enabled) return file;
-      const translated = file.slice(0, -3) + '_translated.md';
-      if (!fs.existsSync(path.join(dir, translated))) {
-        throw new Error(`Missing translated Markdown: ${translated}`);
+      let suffix = null;
+      if (this.config.translation?.enabled) suffix = '_translated.md';
+      if (this.config.annotations?.enabled) suffix = '_annotated.md';
+      if (!suffix) return file;
+
+      const derived = file.slice(0, -3) + suffix;
+      if (!fs.existsSync(path.join(dir, derived))) {
+        const label = this.config.annotations?.enabled ? 'annotated' : 'translated';
+        throw new Error(`Missing ${label} Markdown: ${derived}`);
       }
-      return translated;
+      return derived;
     });
 
     // Sort by numeric prefix (e.g., 000-page.md, 001-page.md)

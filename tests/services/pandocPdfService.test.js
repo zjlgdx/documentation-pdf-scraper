@@ -120,6 +120,24 @@ describe('PandocPdfService', () => {
     expect(() => service._getMarkdownFiles(tempDir)).toThrow('Missing translated Markdown: 001-reference_translated.md');
   });
 
+  it('ignores stale derived files and selects annotated artifacts only when enabled', () => {
+    fs.writeFileSync(path.join(tempDir, '000-guide.md'), '# Guide');
+    fs.writeFileSync(path.join(tempDir, '000-guide_annotated.md'), '# Annotated guide');
+    fs.writeFileSync(path.join(tempDir, '000-guide_translated.md'), '# Translated guide');
+    fs.writeFileSync(path.join(tempDir, '001-reference.md'), '# Reference');
+
+    expect(service._getMarkdownFiles(tempDir)).toEqual(['000-guide.md', '001-reference.md']);
+    service.config.annotations = { enabled: true };
+    expect(() => service._getMarkdownFiles(tempDir)).toThrow(
+      'Missing annotated Markdown: 001-reference_annotated.md'
+    );
+    fs.writeFileSync(path.join(tempDir, '001-reference_annotated.md'), '# Annotated reference');
+    expect(service._getMarkdownFiles(tempDir)).toEqual([
+      '000-guide_annotated.md',
+      '001-reference_annotated.md',
+    ]);
+  });
+
   describe('_buildPandocArgs', () => {
     it('should build basic args', () => {
       const args = service._buildPandocArgs('input.md', 'output.pdf', {});

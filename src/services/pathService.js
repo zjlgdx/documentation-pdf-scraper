@@ -204,4 +204,21 @@ export class PathService {
 
     return resolved;
   }
+
+  /**
+   * 获取英语批注缓存目录，并限制在当前工作目录之下。
+   */
+  getAnnotationCacheDirectory() {
+    const baseTempDir = this.getTempDirectory();
+    const cacheDir = path.join(baseTempDir, 'annotation_cache');
+
+    const rootDir = path.resolve(process.cwd());
+    const resolved = path.resolve(cacheDir);
+
+    if (resolved !== rootDir && !resolved.startsWith(`${rootDir}${path.sep}`)) {
+      throw new Error(`Unsafe annotation cache directory: ${resolved}`);
+    }
+
+    return resolved;
+  }
 }

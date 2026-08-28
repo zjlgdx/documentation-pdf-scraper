@@ -390,6 +390,53 @@ describe('ConfigValidator', () => {
       expect(result.config.translation.jitterStrategy).toBe('full');
     });
 
+    test('应该验证英语批注配置并应用 OAuth 模型默认值', () => {
+      const config = {
+        rootURL: 'https://example.com',
+        pdfDir: './pdfs',
+        navLinksSelector: 'nav a',
+        contentSelector: 'main',
+        markdown: { enabled: true },
+        markdownPdf: { enabled: true },
+        annotations: { enabled: true },
+      };
+
+      const result = validateConfig(config);
+
+      expect(result.config.annotations).toMatchObject({
+        enabled: true,
+        provider: 'agy',
+        model: 'gemini-3.7-flash-high',
+        level: 'high-school',
+        density: 'standard',
+        explanationLanguage: 'Simplified Chinese',
+        timeout: 300000,
+        fallback: {
+          provider: 'codex',
+          model: 'gpt-5.6-luna',
+          reasoningEffort: 'xhigh',
+        },
+      });
+    });
+
+    test('英语批注要求 Markdown/Pandoc 工作流且不能与翻译同时启用', () => {
+      const base = {
+        rootURL: 'https://example.com',
+        pdfDir: './pdfs',
+        navLinksSelector: 'nav a',
+        contentSelector: 'main',
+        annotations: { enabled: true },
+      };
+
+      expect(() => validateConfig(base)).toThrow(/annotations.enabled requires/);
+      expect(() => validateConfig({
+        ...base,
+        markdown: { enabled: true },
+        markdownPdf: { enabled: true },
+        translation: { enabled: true },
+      })).toThrow(/mutually exclusive/);
+    });
+
     test('应该验证 markdownSource 配置', () => {
       const config = {
         rootURL: 'https://example.com',

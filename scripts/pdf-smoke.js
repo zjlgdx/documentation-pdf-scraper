@@ -44,7 +44,8 @@ try {
   const result = await verifyPdf(outputPath, { config, processRunner,
     expectations: { titles: Object.values(titles), articleTitles: Object.values(titles), groups, minTocPages: 2, requireImages: true,
       bodySnippets: ['Semantic card title', 'Card body remains readable.', 'The static limit is 1000.',
-        'Nested child keeps its parent', '| --- | --- |', 'indented_literal = "preserved"'] },
+        '英语批注', 'under the hood', 'Nested child keeps its parent', '| --- | --- |',
+        'indented_literal = "preserved"'] },
     reportDir: path.join(destination, 'qa'),
   });
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');

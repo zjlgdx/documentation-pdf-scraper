@@ -53,6 +53,41 @@ describe('resume identity and batch artifacts', () => {
     expect(await state.canResume(urls[1])).toBe(false);
   });
 
+  it('invalidates annotated artifacts when level, model, or annotation contract changes', async () => {
+    const annotatedConfig = {
+      ...config,
+      annotations: {
+        enabled: true,
+        provider: 'agy',
+        model: 'gemini-3.7-flash-high',
+        level: 'high-school',
+        density: 'standard',
+      },
+    };
+    await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });
+    const identity = state.runIdentity;
+
+    expect(await state.prepareRun(urls, annotatedConfig, {
+      annotationContractVersion: 'test-v1',
+    })).toBe(true);
+    expect(await state.prepareRun(urls, {
+      ...annotatedConfig,
+      annotations: { ...annotatedConfig.annotations, level: 'university' },
+    }, { annotationContractVersion: 'test-v1' })).toBe(false);
+    expect(state.runIdentity).not.toBe(identity);
+
+    await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });
+    expect(await state.prepareRun(urls, {
+      ...annotatedConfig,
+      annotations: { ...annotatedConfig.annotations, model: 'new-model' },
+    }, { annotationContractVersion: 'test-v1' })).toBe(false);
+
+    await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });
+    expect(await state.prepareRun(urls, annotatedConfig, {
+      annotationContractVersion: 'test-v2',
+    })).toBe(false);
+  });
+
   it('assembles only manifest artifacts and checks URL/index identity and bytes', async () => {
     await acquire();
     const artifacts = await state.getArtifacts();

@@ -2,6 +2,13 @@
 
 This fixture checks a repeatable documentation layout, including mixed language text: 中文排版检查。
 
+The verifier works under the hood while the original English paragraph remains unchanged.
+
+> **英语批注 · 高中**
+>
+> - **under the hood**（惯用语）：表示系统内部实际发生的事情。
+>   *Example:* Under the hood, the app validates every file.
+
 Use `⏸ plan mode on` to pause; ✅ Include and ❌ Exclude must remain visible.
 
 ```text

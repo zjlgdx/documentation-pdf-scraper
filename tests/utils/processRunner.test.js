@@ -24,6 +24,17 @@ describe('ProcessRunner', () => {
     expect(runner.getRunningProcesses()).toEqual([]);
   });
 
+  it('can send input and close stdin for CLIs that otherwise wait for more content', async () => {
+    const runner = createRunner();
+    const result = await runner.run(process.execPath, ['-e', [
+      'let value = "";',
+      'process.stdin.on("data", (chunk) => { value += chunk; });',
+      'process.stdin.on("end", () => process.stdout.write(`closed:${value}`));',
+    ].join('')], { input: '' });
+
+    expect(result.stdout).toBe('closed:');
+  });
+
   it('rejects nonzero exits and missing executables with diagnostics', async () => {
     const runner = createRunner();
     await expect(runner.run(process.execPath, ['-e', 'console.error("bad input"); process.exit(7)']))

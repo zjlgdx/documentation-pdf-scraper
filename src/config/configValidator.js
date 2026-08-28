@@ -599,6 +599,53 @@ const configSchema = Joi.object({
   })
     .default()
     .description('Translation settings'),
+
+  // 英语学习批注配置（通过本地 OAuth CLI 调用，不保存 API key）
+  annotations: Joi.object({
+    enabled: Joi.boolean().default(false).description('Enable English learning annotations'),
+
+    provider: Joi.string()
+      .valid('agy')
+      .default('agy')
+      .description('Primary OAuth CLI annotation provider'),
+
+    model: Joi.string()
+      .trim()
+      .min(1)
+      .default('gemini-3.7-flash-high')
+      .description('Primary annotation model'),
+
+    level: Joi.string()
+      .valid('junior-high', 'high-school', 'university')
+      .default('high-school')
+      .description('Reader English level'),
+
+    density: Joi.string()
+      .valid('light', 'standard', 'dense')
+      .default('standard')
+      .description('Maximum annotation density per prose segment'),
+
+    explanationLanguage: Joi.string()
+      .valid('Simplified Chinese')
+      .default('Simplified Chinese')
+      .description('Annotation explanation language'),
+
+    timeout: Joi.number()
+      .integer()
+      .min(1000)
+      .default(300000)
+      .description('Annotation timeout per CLI batch (ms)'),
+
+    fallback: Joi.object({
+      provider: Joi.string().valid('codex').default('codex'),
+      model: Joi.string().trim().min(1).default('gpt-5.6-luna'),
+      reasoningEffort: Joi.string()
+        .valid('low', 'medium', 'high', 'xhigh')
+        .default('xhigh'),
+    }).default(),
+  })
+    .default()
+    .description('English learning annotation settings'),
 }).custom((value, helpers) => {
   if (value.markdownPdf.enabled && !value.markdown.enabled) {
     return helpers.message({ custom: 'markdownPdf.enabled requires markdown.enabled' });
@@ -606,6 +653,12 @@ const configSchema = Joi.object({
   if ((value.markdownSource.enabled || value.markdownPdf.batchMode)
       && !(value.markdown.enabled && value.markdownPdf.enabled)) {
     return helpers.message({ custom: 'markdownSource and batchMode require the Markdown/Pandoc workflow' });
+  }
+  if (value.annotations.enabled && !(value.markdown.enabled && value.markdownPdf.enabled)) {
+    return helpers.message({ custom: 'annotations.enabled requires markdown.enabled and markdownPdf.enabled' });
+  }
+  if (value.annotations.enabled && value.translation.enabled) {
+    return helpers.message({ custom: 'annotations.enabled and translation.enabled are mutually exclusive' });
   }
   return value;
 });

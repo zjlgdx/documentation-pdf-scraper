@@ -10,7 +10,7 @@ export class ProcessRunner {
 
   async run(command, args = [], options = {}) {
     if (this.disposed) throw new ProcessingError('Process runner is disposed');
-    const { timeoutMs = 300000, maxBuffer = 10 * 1024 * 1024, signal, cwd, env,
+    const { timeoutMs = 300000, maxBuffer = 10 * 1024 * 1024, signal, cwd, env, input,
       onStdout, failureLabel = command } = options;
     const task = { command };
     task.done = new Promise((resolve, reject) => {
@@ -39,6 +39,13 @@ export class ProcessRunner {
             task.child.kill('SIGKILL');
           }
         });
+      }
+      if (input !== undefined) {
+        task.child.stdin.on('error', (error) => {
+          outputError = outputError || error;
+          task.child.kill('SIGKILL');
+        });
+        task.child.stdin.end(input);
       }
     });
     this.running.add(task);

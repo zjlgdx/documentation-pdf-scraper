@@ -14,6 +14,7 @@ import { PageManager } from '../services/pageManager.js';
 import { ImageService } from '../services/imageService.js';
 import { PDFStyleService } from '../services/pdfStyleService.js';
 import { TranslationService } from '../services/translationService.js';
+import { AnnotationService } from '../services/annotationService.js';
 import { MarkdownService } from '../services/markdownService.js';
 import { PandocPdfService } from '../services/pandocPdfService.js';
 import { Scraper } from './scraper.js';
@@ -34,6 +35,7 @@ const SCRAPER_DEPENDENCIES = [
   'imageService',
   'pdfStyleService',
   'translationService',
+  'annotationService',
   'markdownService',
   'markdownToPdfService',
   'httpResourceService',
@@ -150,6 +152,17 @@ function registerContentServices(container) {
     'translationService',
     (config, pathService, logger) => new TranslationService({ config, pathService, logger }),
     ['config', 'pathService', 'logger']
+  );
+  registerSingleton(
+    container,
+    'annotationService',
+    (config, pathService, logger, processRunner) => new AnnotationService({
+      config,
+      pathService,
+      logger,
+      processRunner,
+    }),
+    ['config', 'pathService', 'logger', 'processRunner']
   );
   registerSingleton(
     container,

@@ -127,6 +127,7 @@ describe('Scraper', () => {
       },
       markdownService: null,
       translationService: null,
+      annotationService: null,
       markdownToPdfService: null,
     };
 
@@ -149,6 +150,7 @@ describe('Scraper', () => {
       scraper.config.markdownSource = { enabled: true };
       scraper.config.targetUrls = ['https://example.com/guide'];
       scraper.config.translation = { enabled: false };
+      scraper.config.annotations = { enabled: false };
       scraper.markdownService = {
         normalizeResourceUrls: vi.fn((content) => content),
         sanitizeMarkdown: vi.fn((content) => content),
@@ -158,6 +160,9 @@ describe('Scraper', () => {
       scraper.markdownToPdfService = { convertContentToPdf: vi.fn() };
       scraper.translationService = {
         translateMarkdown: vi.fn().mockResolvedValue('# Translated guide'),
+      };
+      scraper.annotationService = {
+        annotateMarkdown: vi.fn().mockResolvedValue('# Source guide\n\n> **英语批注 · 高中**'),
       };
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
         new Response('# Source guide\n\nContent.', {
@@ -203,6 +208,23 @@ describe('Scraper', () => {
       expect(scraper.translationService.translateMarkdown).toHaveBeenCalledTimes(1);
       expect(mockDependencies.fileService.writeText).toHaveBeenCalledTimes(2);
       expect(result.outputPath).toBe('pdfs/markdown/001-page_translated.md');
+    });
+
+    it('keeps the English source and selects the annotated artifact when enabled', async () => {
+      scraper.config.annotations.enabled = true;
+      const result = await scraper.scrapePage('https://example.com/guide', 1);
+
+      expect(scraper.annotationService.annotateMarkdown).toHaveBeenCalledWith(
+        '# Source guide\n\nContent.'
+      );
+      expect(scraper.translationService.translateMarkdown).not.toHaveBeenCalled();
+      expect(mockDependencies.fileService.writeText).toHaveBeenCalledTimes(2);
+      expect(mockDependencies.fileService.writeText).toHaveBeenNthCalledWith(
+        2,
+        'pdfs/markdown/001-page_annotated.md',
+        '# Source guide\n\n> **英语批注 · 高中**'
+      );
+      expect(result.outputPath).toBe('pdfs/markdown/001-page_annotated.md');
     });
 
     it('fails on Pandoc errors without switching renderers', async () => {
