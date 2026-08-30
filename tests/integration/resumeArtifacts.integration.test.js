@@ -53,7 +53,7 @@ describe('resume identity and batch artifacts', () => {
     expect(await state.canResume(urls[1])).toBe(false);
   });
 
-  it('invalidates annotated artifacts when level, model, or annotation contract changes', async () => {
+  it('invalidates annotated artifacts when configuration, contract, or rendering changes', async () => {
     const annotatedConfig = {
       ...config,
       annotations: {
@@ -99,6 +99,13 @@ describe('resume identity and batch artifacts', () => {
     await state.prepareRun(urls, annotatedConfig, { annotationContractVersion: 'test-v1' });
     expect(await state.prepareRun(urls, annotatedConfig, {
       annotationContractVersion: 'test-v2',
+    })).toBe(false);
+
+    await state.prepareRun(urls, annotatedConfig, {
+      annotationContractVersion: 'test-v1', annotationRenderVersion: 'render-v1',
+    });
+    expect(await state.prepareRun(urls, annotatedConfig, {
+      annotationContractVersion: 'test-v1', annotationRenderVersion: 'render-v2',
     })).toBe(false);
   });
 

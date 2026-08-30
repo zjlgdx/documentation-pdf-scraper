@@ -1,4 +1,5 @@
-export const ANNOTATION_CONTRACT_VERSION = '1.1.0';
+export const ANNOTATION_CONTRACT_VERSION = '2.0.0';
+export const ANNOTATION_RENDER_VERSION = '1.1.2';
 
 export const ANNOTATION_TYPES = [
   'word',
@@ -8,6 +9,11 @@ export const ANNOTATION_TYPES = [
   'native-expression',
   'technical-term',
   'slang',
+  'grammar-pattern',
+  'discourse-logic',
+  'register-usage',
+  'writing-pattern',
+  'concept',
 ];
 
 export const ANNOTATION_DENSITY_LIMITS = {
@@ -38,13 +44,21 @@ export function createAnnotationResponseSchema(maxAnnotations, segmentCount) {
               items: {
                 type: 'object',
                 additionalProperties: false,
-                required: ['quote', 'occurrence', 'type', 'explanationZh', 'exampleEn'],
+                required: [
+                  'quote',
+                  'occurrence',
+                  'type',
+                  'explanationZh',
+                  'exampleEn',
+                  'learningPromptZh',
+                ],
                 properties: {
                   quote: { type: 'string' },
                   occurrence: { type: 'integer', minimum: 1 },
                   type: { type: 'string', enum: ANNOTATION_TYPES },
                   explanationZh: { type: 'string' },
                   exampleEn: { type: 'string' },
+                  learningPromptZh: { type: 'string' },
                 },
               },
             },

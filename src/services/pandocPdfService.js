@@ -1,7 +1,10 @@
 // src/services/pandocPdfService.js
 import { ProcessRunner } from '../utils/processRunner.js';
 import { MarkdownNormalizer } from './pdf/markdownNormalizer.js';
-import { pandocHeader } from './pdf/pandocTemplate.js';
+import {
+  englishAnnotationFilterPath,
+  pandocHeader,
+} from './pdf/pandocTemplate.js';
 import { createHash } from 'crypto';
 import path from 'path';
 import fs from 'fs';
@@ -477,6 +480,8 @@ export class PandocPdfService {
       inputPath,
       '-o',
       outputPath,
+      '--lua-filter',
+      englishAnnotationFilterPath,
       '--pdf-engine=xelatex', // 使用 xelatex 支持中文
       '--variable',
       `CJKmainfont=${cjkMainFont}`, // 主字体（使用 CI 可用的开源字体，支持通过配置覆盖）

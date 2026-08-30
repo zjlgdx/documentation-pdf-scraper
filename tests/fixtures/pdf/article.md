@@ -2,16 +2,21 @@
 
 This fixture checks a repeatable documentation layout, including mixed language text: 中文排版检查。
 
-The verifier works under the hood while the original English paragraph remains unchanged.
+The verifier works <span class="english-annotation-source">under the hood</span> to <span class="english-annotation-source">bundle</span> checks and <span class="english-annotation-source">surface</span> issues while the visible English wording remains unchanged.
 
-> **英语批注 · 高中**
->
-> - **under the hood**（惯用语）：表示系统内部实际发生的事情。
->   *Example:* Under the hood, the app validates every file.
-> - **bundle**（生词 · 英式 IPA /ˈbʌndəl/ · 美式 IPA /ˈbʌndəl/）：表示一组、一捆，或把内容打包在一起。
->   *Example:* The build tool bundles all scripts into one file.
-> - **surface**（生词 · 英式 IPA /ˈsɜːfɪs/ · 美式 IPA /ˈsɜːrfəs/）：表示表面或显现出来。
->   *Example:* The problem may surface during verification.
+::: english-annotation
+**英语批注 · 高中**
+
+- **under the hood**（惯用语）：表示系统内部实际发生的事情。
+
+  **例句：** Under the hood, the app validates every file.
+- **bundle**（生词 · 英式 IPA /ˈbʌndəl/ · 美式 IPA /ˈbʌndəl/）：表示一组、一捆，或把内容打包在一起。
+
+  **例句：** The build tool bundles all scripts into one file.
+- **surface**（生词 · 英式 IPA /ˈsɜːfɪs/ · 美式 IPA /ˈsɜːrfəs/）：表示表面或显现出来。
+
+  **例句：** The problem may surface during verification.
+:::
 
 Use `⏸ plan mode on` to pause; ✅ Include and ❌ Exclude must remain visible.
 
@@ -72,3 +77,12 @@ Indented code remains code:
 | --- | --- |
 | x | y |
 ```
+
+::: english-learning-review
+**学习回顾 · 先不看批注**
+
+用自己的话回答；答不出时，再回看上方对应批注。
+
+1. **under the hood**：为什么这个表达适合描述用户看不到的内部实现？
+2. **bundle**：你会如何用这个词描述构建工具的行为？
+:::

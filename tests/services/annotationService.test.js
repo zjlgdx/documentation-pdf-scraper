@@ -16,7 +16,10 @@ function responseFor(segments, annotationsByText = new Map()) {
   return {
     segments: segments.map((segment) => ({
       segmentId: segment.segmentId,
-      annotations: annotationsByText.get(segment.text) || [],
+      annotations: (annotationsByText.get(segment.text) || []).map((annotation) => ({
+        learningPromptZh: '',
+        ...annotation,
+      })),
     })),
   };
 }
@@ -111,10 +114,17 @@ describe('AnnotationService', () => {
       segmentsText(markdown, 'The framework'),
       'This gets the ball rolling quickly.',
     ]);
-    expect(result).toContain('The framework works under the hood with `secret phrase`');
-    expect(result).toContain('> **英语批注 · 高中**');
+    expect(result).toContain(
+      'The framework works <span class="english-annotation-source">under the hood</span> with `secret phrase`'
+    );
+    expect(result).toContain('::: english-annotation');
+    expect(result).toContain('**英语批注 · 高中**');
     expect(result).toContain('**under the hood**（惯用语）');
-    expect(result).toContain('  > **英语批注 · 高中**');
+    expect(result).toContain('**例句：** Under the hood, the app validates every file.');
+    expect(result).toContain('  ::: english-annotation');
+    expect(result).toContain(
+      '- This <span class="english-annotation-source">gets the ball rolling</span> quickly.'
+    );
     expect(result).toContain('const phrase = "under the hood";');
     expect(result).toContain('| under the hood | internal |');
     expect(result).toContain('这是一个中文段落，不应该发送给模型。');
@@ -204,6 +214,108 @@ describe('AnnotationService', () => {
     expect(fallbackClient.annotate).not.toHaveBeenCalled();
   });
 
+  it('supports higher-order annotations and adds a bounded active-recall review', async () => {
+    const markdown = 'Even when the tests pass, the release can fail because production has different constraints.\n';
+    primaryClient.annotate.mockImplementation(({ segments }) => responseFor(segments, new Map([[
+      segments[0].text,
+      [{
+        quote: 'Even when the tests pass',
+        occurrence: 1,
+        type: 'discourse-logic',
+        explanationZh: '用让步关系提醒读者：测试通过并不能保证生产发布成功。',
+        exampleEn: 'Even when the plan looks complete, new evidence can change it.',
+        learningPromptZh: '为什么这里用让步关系，而不是直接说发布会失败？',
+      }],
+    ]])));
+
+    const result = await createService().annotateMarkdown(markdown);
+
+    expect(result).toContain('**Even when the tests pass**（篇章逻辑）');
+    expect(result).toContain('::: english-learning-review');
+    expect(result).toContain('**学习回顾 · 先不看批注**');
+    expect(result).toContain('为什么这里用让步关系，而不是直接说发布会失败？');
+  });
+
+  it('prioritizes higher-order questions in the three-item article review', () => {
+    const service = createService();
+    const segments = ['lexical-1', 'lexical-2', 'lexical-3', 'grammar'].map((segmentId) => ({
+      segmentId,
+    }));
+    const results = new Map(segments.map(({ segmentId }, index) => [segmentId, [{
+      quote: segmentId,
+      type: index === 3 ? 'grammar-pattern' : 'word',
+      learningPromptZh: `问题 ${index + 1}？`,
+    }]]));
+
+    const review = service._renderReviewBlock(segments, results);
+
+    expect(review).toContain('1. **grammar**：问题 4？');
+    expect(review).toContain('2. **lexical-1**：问题 1？');
+    expect(review).toContain('3. **lexical-2**：问题 2？');
+    expect(review).not.toContain('lexical-3');
+  });
+
+  it('requests selective multidimensional notes with contextual glosses and deep questions', async () => {
+    primaryClient.annotate.mockImplementation(({ segments }) => responseFor(segments));
+
+    await createService().annotateMarkdown(
+      'A restrained annotation should focus on a genuinely useful expression.\n'
+    );
+
+    const [{ prompt, responseSchema }] = primaryClient.annotate.mock.calls.map(([input]) => input);
+    expect(prompt).toContain('ceiling, not a quota');
+    expect(prompt).toContain('grammar patterns, discourse logic, register and usage');
+    expect(prompt).toContain('complete multiword expression');
+    expect(prompt).toContain('context-specific in Simplified Chinese');
+    expect(prompt).toContain('why/how/compare/what-if question');
+    const annotationSchema = responseSchema.properties.segments.items
+      .properties.annotations.items.properties;
+    expect(annotationSchema.quote).toEqual({ type: 'string' });
+    expect(annotationSchema.learningPromptZh).toEqual({ type: 'string' });
+  });
+
+  it.each([
+    {
+      label: 'non-Chinese explanations',
+      invalid: {
+        explanationZh: 'A generic English definition.',
+        exampleEn: 'This is a natural example sentence.',
+        learningPromptZh: '',
+      },
+    },
+    {
+      label: 'non-sentence English examples',
+      invalid: {
+        explanationZh: '表示在上下文中逐步处理问题。',
+        exampleEn: 'Process.',
+        learningPromptZh: '',
+      },
+    },
+    {
+      label: 'non-Chinese learning prompts',
+      invalid: {
+        explanationZh: '表示在上下文中逐步处理问题。',
+        exampleEn: 'The team works through difficult cases.',
+        learningPromptZh: 'Why is this useful?',
+      },
+    },
+  ])('rejects $label before using the fallback', async ({ invalid }) => {
+    primaryClient.annotate.mockImplementation(({ segments }) => responseFor(segments, new Map([[
+      segments[0].text,
+      [{
+        quote: 'works through',
+        occurrence: 1,
+        type: 'phrasal-verb',
+        ...invalid,
+      }],
+    ]])));
+    fallbackClient.annotate.mockImplementation(({ segments }) => responseFor(segments));
+
+    const markdown = 'The team works through difficult cases methodically.\n';
+    await expect(createService().annotateMarkdown(markdown)).resolves.toBe(markdown);
+    expect(fallbackClient.annotate).toHaveBeenCalledOnce();
+  });
+
   it('retries AGY once when its envelope omits structured output', async () => {
     primaryClient.annotate
       .mockRejectedValueOnce(new ValidationError('Missing structured output', {
@@ -276,6 +388,9 @@ describe('AnnotationService', () => {
     expect(primaryClient.annotate).toHaveBeenCalledOnce();
     expect(fallbackClient.annotate).toHaveBeenCalledOnce();
     expect(result).toContain('**under the hood**（惯用语）');
+    expect(result).toContain(
+      '<span class="english-annotation-source">under the hood</span>'
+    );
     expect(result).not.toContain('\n\n\n');
   });
 
@@ -314,6 +429,9 @@ describe('AnnotationService', () => {
     const second = await service.annotateMarkdown(markdown);
 
     expect(first).toBe(second);
+    expect(first).toContain(
+      'in practice this is rare, but <span class="english-annotation-source">in practice</span> it still matters.'
+    );
     expect(primaryClient.annotate).toHaveBeenCalledOnce();
 
     const universityClient = { annotate: vi.fn(({ segments }) => responseFor(segments)) };

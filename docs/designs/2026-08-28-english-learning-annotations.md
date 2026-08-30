@@ -22,17 +22,26 @@ V1 不包含全文翻译与批注同时启用、自动判断整个站点语言�
 
 ### Output choice
 
-采用“英文原文 + 相邻中文批注框”。不在正文内插入上标编号，也不做页边坐标定位。相邻块引用能保留阅读顺序，沿用现有 Markdown/Pandoc 通路，并减少跨页、窄页面和 Kindle 版式中的脆弱行为。
+采用“英文原文 + 相邻中文批注框 + 篇末学习回顾”。不在正文内插入上标编号，也不做页边坐标定位。相邻批注保留阅读顺序；每篇最多三个回顾问题把被动重读转为主动回忆。两类内容使用不同的语义化 fenced div，并由 Pandoc 映射为可跨页的低对比度灰阶框，减少窄页面和 Kindle 版式中的脆弱行为。
 
 示例输出：
 
 ```markdown
 The framework does most of the work under the hood.
 
-> **英语批注 · 高中**
->
-> - **under the hood**（惯用语）：表示系统内部实际发生的事情。
->   *Example:* Under the hood, the app checks every file.
+::: english-annotation
+**英语批注 · 高中**
+
+- **under the hood**（惯用语）：表示系统内部实际发生的事情。
+
+  **例句：** Under the hood, the app checks every file.
+:::
+
+::: english-learning-review
+**学习回顾 · 先不看批注**
+
+1. **under the hood**：为什么这个表达适合描述用户看不到的内部实现？
+:::
 ```
 
 ### Model routing
@@ -48,11 +57,15 @@ The framework does most of the work under the hood.
 英语水平和批注密度是两个独立维度：
 
 - `junior-high`：解释常见但超出初中范围的词组、搭配和表达。
-- `high-school`：忽略大部分基础词，强调惯用语、搭配、语域和地道表达。
-- `university`：只解释不透明、专业性强、语用特殊或容易误解的表达。
+- `high-school`：忽略大部分基础词，强调可迁移短语、语法、篇章逻辑、语域和写作句型。
+- `university`：只解释不透明、专业性强、语用特殊、结构上值得学习或概念上关键的目标。
 - `light`、`standard`、`dense` 分别允许每个文本段最多 1、2、3 条批注。
 
-高等级意味着更少的基础词解释，而不是强制减少所有类型的批注。模型可以为任意段返回零条。
+批注对象不限于单词和短语。完整类型还包括 `grammar-pattern`、`discourse-logic`、`register-usage`、`writing-pattern` 和 `concept`；高阶类型锚定能识别结构或概念的最短原文片段，避免给整句或整段制造大面积标记。
+
+高等级意味着更少的基础词解释，而不是强制减少所有类型的批注。密度始终是上限而不是配额，模型可以为任意段返回零条。选择顺序优先“妨碍理解的表达”“能迁移到其他语境的语言模式”和“支撑当前内容理解的关键概念”；跳过专有名词、产品标签、语义透明的词组、目标水平通常已掌握的标准术语，以及同一批次中没有新义的重复表达。完整多词表达优先于其中价值较低的单词。
+
+释义使用简洁、与当前语境对应的中文；例句使用新的自然英文句子，不照抄原文。高价值的语法、篇章、写作或概念批注可以附带一个中文 `learningPromptZh`，问题采用 why/how/compare/what-if 等需要解释的形式，不在问题中泄露答案。渲染阶段每篇最多选择三个问题组成“学习回顾”，优先保留语法、篇章、语域、写作和概念类问题，再用词汇问题补足。
 
 ## Approach
 
@@ -85,7 +98,7 @@ The framework does most of the work under the hood.
 
 批注服务解析 Markdown AST，而不是用全局正则修改文本。它为合格的段落和列表项正文生成稳定 `segmentId`，并保留原文与位置。以下内容不可作为锚点：frontmatter、标题、代码块、行内代码区间、链接目标和 URL、表格、原始 HTML/MDX。非英文或明显混合语言的段落由确定性规则跳过。
 
-行内代码仍保留在提供给模型的上下文中，但其范围标记为受保护。模型只能选择同一 segment 内连续、精确存在的英文片段；服务在 AST 节点边界插入批注块，不改写原始段落。
+行内代码仍保留在提供给模型的上下文中，但其范围标记为受保护。模型只能选择同一 segment 内连续、精确存在的英文片段；服务在 `_annotated.md` 中用语义化 span 标记已验证的原文锚点，并在 AST 节点边界插入批注块。原始 `.md` 和原文可见字符不变。
 
 ### Model contract and validation
 
@@ -97,17 +110,19 @@ The framework does most of the work under the hood.
   "occurrence": 1,
   "type": "idiom",
   "explanationZh": "表示系统内部实际发生的事情。",
-  "exampleEn": "Under the hood, the app checks every file."
+  "exampleEn": "Under the hood, the app checks every file.",
+  "learningPromptZh": "为什么这个表达适合描述用户看不到的内部实现？"
 }
 ```
 
-`type` 只允许 `word`、`phrasal-verb`、`idiom`、`collocation`、`native-expression`、`technical-term`、`slang`。确定性验证器对每批执行：
+`type` 允许 `word`、`phrasal-verb`、`idiom`、`collocation`、`native-expression`、`technical-term`、`slang`、`grammar-pattern`、`discourse-logic`、`register-usage`、`writing-pattern`、`concept`。确定性验证器对每批执行：
 
 - 响应覆盖所有且仅包含已请求的 segment。
 - `quote` 在对应原文中精确存在，`occurrence` 能唯一定位。
 - 锚点不与受保护范围相交。
 - 同一段内无重复或重叠批注。
-- 类型、密度上限、解释长度和例句类型符合 schema。
+- 类型与密度上限符合提供方支持的 schema 子集；本地验证器另行检查字符串长度、释义含中文、例句构成英文句子。
+- 每段至多一个非空学习问题，且问题含中文；每篇渲染至多三个回顾问题。
 
 模型风格判断不进入硬编码词表；可机械验证的事实全部由本地验证器负责。
 
@@ -115,7 +130,7 @@ The framework does most of the work under the hood.
 
 缓存位于 `.temp/annotation_cache`，缓存键至少包含 segment 原文哈希、主/兜底路由配置、模型、reasoning effort、level、density、解释语言，以及 prompt/schema/contract version。只缓存通过验证的最终结果，并在缓存记录中保存实际命中的提供方。`make clean-cache` 应通过现有 `.temp` 清理语义移除它。
 
-批注配置和 annotation contract version 必须进入 `StateManager` 的采集身份，使等级、模型或提示契约变化会废弃旧的 `_annotated.md`；只更换 PDF profile 仍可复用同一 Markdown 产物。
+批注配置、annotation contract version 和 render version 必须进入 `StateManager` 的采集身份，使等级、模型、提示契约或锚点呈现变化会废弃旧的 `_annotated.md`；render version 不进入模型缓存键，因此纯视觉变化可复用已验证的模型结果。只更换 PDF profile 仍可复用同一 Markdown 产物。
 
 每页始终写入原始 `.md`。批注成功后再写 `_annotated.md`，并把后者作为当前运行 artifact manifest 中的选定 Markdown。批处理 PDF 继续读取 manifest，不通过扫描目录猜测变体。批注缓存是派生加速数据，不成为内容 metadata 的第二真相源。
 
@@ -156,13 +171,15 @@ acquired Markdown
 
 两个 CLI 客户端共享一个最小接口，但不强行复用现有 `CliJsonTranslationClient`：AGY 和 Codex 的启动参数、输出信封及 schema 能力不同。只有在实现时证明生命周期代码完全相同，才抽取通用进程辅助函数。
 
-V1 直接复用 Pandoc 的标准 blockquote 渲染，不新增 Lua filter 或专用 LaTeX 环境。只有 PDF smoke 显示现有样式不可读时，才对通用 blockquote 做不改变语义的最小排版调整。
+原文锚点使用语义化 span，并通过一个只处理该 class 的最小 Lua filter 映射为中性点状下划线。点状下划线沿用“该文本有补充说明”的常见视觉约定，不使用已被拼写/语法检查广泛占用的波浪线，也不依赖颜色传达含义；矢量绘制不会向复制、搜索和朗读所用的文本层注入标记字符。
+
+即时批注和篇末回顾分别使用 `english-annotation` 与 `english-learning-review` fenced div。Lua filter 只在 LaTeX 输出中将它们映射为两个可跨页 `tcolorbox`：即时批注采用更轻的底色、左侧强调线和小字号，紧邻目标段落；学习回顾使用略强边框并与正文留出更大前距。框内顺序固定为“原文对象 → 类型/IPA → 语境义 → 新例句”，不依赖颜色区分类别，也不把解释挤进正文行间。
 
 ## Testing
 
 单元测试覆盖 AST 保护范围、重复短语 occurrence、所有等级和密度、合法空结果、过度批注、非法锚点、缺失 segment、兜底触发、双失败、缓存键版本变化，以及 provider 信封/超时/进程终止。CLI 测试使用 mock spawn，不进行真实 OAuth 请求，并验证定时器和子进程均被清理。
 
-配置和集成测试覆盖 Markdown 前置条件、翻译互斥、原始与 `_annotated.md` 产物、失败时不发布 manifest、level/model/contract 改变导致 resume 失效，以及 PDF profile 改变仍能复用批注 Markdown。将实测使用的六类文本整理成固定评测夹具，分别覆盖俚语、技术文档、水平差异、重复短语、无需批注和混合代码；自动测试验证结构与边界，文风质量保留为人工抽样检查。
+配置和集成测试覆盖 Markdown 前置条件、翻译互斥、原始与 `_annotated.md` 产物、原文锚点、失败时不发布 manifest、level/model/contract/render 改变导致 resume 失效，以及 PDF profile 改变仍能复用批注 Markdown。将实测使用的六类文本整理成固定评测夹具，分别覆盖俚语、技术文档、水平差异、重复短语、无需批注和混合代码；自动测试验证结构与边界，文风质量保留为人工抽样检查。
 
 实现阶段的最小验证门槛：
 
@@ -172,7 +189,7 @@ V1 直接复用 Pandoc 的标准 blockquote 渲染，不新增 Lua filter 或专
 - `make pdf-smoke`
 - `PDF_PROFILE=kindle-scribe make pdf-smoke`
 
-必须人工查看生成的 PNG 预览，确认原文未变、批注紧邻目标段落、中文字体正常、长批注可跨页、无边界裁切，并检查 TOC 与后续段落没有回归。获得明确授权后，再用小型英文目标做一次真实 OAuth 端到端验证；报告中分别标注采集、批注、渲染和视觉证据。
+必须人工查看生成的 PNG 预览，确认每条批注的原文锚点有清晰点状下划线、原文可见字符未变、批注紧邻目标段落、标题/类型/释义/例句层级稳定、即时批注与学习回顾能一眼区分、中文字体正常、长批注可跨页、无孤立标题或边界裁切，并检查 TOC 与后续段落没有回归。获得明确授权后，再用小型英文目标做一次真实 OAuth 端到端验证；报告中分别标注采集、批注、渲染和视觉证据。
 
 ## Assumptions
 

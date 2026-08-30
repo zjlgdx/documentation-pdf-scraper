@@ -25,7 +25,21 @@ const TYPE_LABELS = {
   'native-expression': '地道表达',
   'technical-term': '技术术语',
   slang: '俚语',
+  'grammar-pattern': '语法结构',
+  'discourse-logic': '篇章逻辑',
+  'register-usage': '语域用法',
+  'writing-pattern': '写作句型',
+  concept: '关键概念',
 };
+
+const MAX_REVIEW_PROMPTS = 3;
+const HIGHER_ORDER_TYPES = new Set([
+  'grammar-pattern',
+  'discourse-logic',
+  'register-usage',
+  'writing-pattern',
+  'concept',
+]);
 
 const LEVEL_LABELS = {
   'junior-high': '初中',
@@ -244,10 +258,15 @@ export class AnnotationService {
 
   _buildPrompt(batch) {
     const levelGuidance = {
-      'junior-high': 'Explain useful expressions beyond junior-high English, including common phrasal verbs.',
-      'high-school': 'Skip basic vocabulary; focus on idioms, collocations, register, and native phrasing.',
-      university: 'Annotate only opaque, technical, pragmatically special, or easily misunderstood expressions.',
+      'junior-high': 'Explain useful expressions beyond junior-high English and clear, reusable sentence patterns.',
+      'high-school': 'Skip basic vocabulary; focus on reusable phrases, grammar, discourse logic, register, and writing patterns.',
+      university: 'Annotate only opaque, technical, pragmatically special, structurally instructive, or conceptually important targets.',
     }[this.level];
+    const densityGuidance = {
+      light: 'Most segments should have zero notes; use one only when it has clear learning value.',
+      standard: 'Use zero or one note in most segments; use a second only for an independent high-value target.',
+      dense: 'Remain selective even with a higher ceiling; do not fill available slots automatically.',
+    }[this.density];
     const payload = batch.map(({ segmentId, text, protectedRanges }) => ({
       segmentId,
       markdown: text,
@@ -258,6 +277,14 @@ export class AnnotationService {
       `Reader level: ${this.level}. ${levelGuidance}`,
       `Explanation language: ${this.explanationLanguage}.`,
       `Return at most ${this.maxAnnotations} annotations per segment; zero is valid and preferred over a basic or forced note.`,
+      `Treat the maximum as a ceiling, not a quota. ${densityGuidance}`,
+      'Targets may be vocabulary units or higher-order learning targets: grammar patterns, discourse logic, register and usage, reusable writing patterns, and critical domain concepts.',
+      'For a higher-order target, quote the shortest exact span that still makes the structure or idea identifiable.',
+      'Prefer the complete multiword expression over a less useful word inside it.',
+      'Do not annotate proper names, product labels, transparent phrases, standard terms likely known at the reader level, or a quote already selected elsewhere in this batch unless it has a genuinely different meaning.',
+      'Make explanationZh concise and context-specific in Simplified Chinese. Make exampleEn a short, natural new sentence rather than copying the source.',
+      'learningPromptZh may be empty. Use a short Chinese why/how/compare/what-if question only for a high-value target that benefits from active recall or self-explanation.',
+      'Use a non-empty learningPromptZh for at most one annotation per segment. Do not include the answer in the question.',
       'Every requested segmentId must appear exactly once, including segments with an empty annotations array.',
       'Each quote must be a case-sensitive exact substring of markdown and occurrence is one-based.',
       'Never select text intersecting protectedRanges. Do not annotate Markdown syntax, code, URLs, or link destinations.',
@@ -301,45 +328,100 @@ export class AnnotationService {
         ranges.push(range);
         return normalized;
       });
+      if (annotations.filter((annotation) => annotation.learningPromptZh).length > 1) {
+        throw new ValidationError(`Too many learning prompts for ${result.segmentId}`);
+      }
       validated.set(result.segmentId, { annotations });
     }
     return validated;
   }
 
   _renderMarkdown(markdown, segments, results) {
-    const edits = segments
-      .map((segment) => ({
-        offset: segment.insertOffset,
-        block: this._renderBlock(segment, results.get(segment.segmentId) || []),
-      }))
-      .filter((edit) => edit.block)
-      .sort((left, right) => right.offset - left.offset);
+    const edits = [];
+    for (const segment of segments) {
+      const annotations = results.get(segment.segmentId) || [];
+      const block = this._renderBlock(segment, annotations);
+      if (!block) continue;
+
+      const after = markdown.slice(segment.insertOffset);
+      const suffix = after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n'
+        : after ? '\n\n' : '\n';
+      edits.push({
+        start: segment.insertOffset,
+        end: segment.insertOffset,
+        replacement: `\n\n${block}${suffix}`,
+      });
+
+      for (const annotation of annotations) {
+        const range = locateOccurrence(segment.text, annotation.quote, annotation.occurrence);
+        const source = segment.text.slice(range.start, range.end);
+        edits.push({
+          start: segment.start + range.start,
+          end: segment.start + range.end,
+          replacement: `<span class="english-annotation-source">${source}</span>`,
+        });
+      }
+    }
+    edits.sort((left, right) => right.start - left.start || right.end - left.end);
 
     let output = markdown;
     for (const edit of edits) {
-      const before = output.slice(0, edit.offset);
-      const after = output.slice(edit.offset);
-      const suffix = after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n'
-        : after ? '\n\n' : '\n';
-      output = `${before}\n\n${edit.block}${suffix}${after}`;
+      output = output.slice(0, edit.start) + edit.replacement + output.slice(edit.end);
     }
-    return output;
+
+    const review = this._renderReviewBlock(segments, results);
+    if (!review) return output;
+    const separator = output.endsWith('\n\n') ? '' : output.endsWith('\n') ? '\n' : '\n\n';
+    return `${output}${separator}${review}\n`;
   }
 
   _renderBlock(segment, annotations) {
     if (annotations.length === 0) return '';
     const prefix = segment.indent;
     const lines = [
-      `${prefix}> **英语批注 · ${LEVEL_LABELS[this.level]}**`,
-      `${prefix}>`,
+      `${prefix}::: english-annotation`,
+      `${prefix}**英语批注 · ${LEVEL_LABELS[this.level]}**`,
+      prefix,
     ];
     annotations.forEach((annotation) => {
       const ipaLabel = formatIpaLabel(annotation.ipa);
       lines.push(
-        `${prefix}> - **${escapeMarkdown(annotation.quote)}**（${TYPE_LABELS[annotation.type]}${ipaLabel}）：${escapeMarkdown(annotation.explanationZh)}`,
-        `${prefix}>   *Example:* ${escapeMarkdown(annotation.exampleEn)}`
+        `${prefix}- **${escapeMarkdown(annotation.quote)}**（${TYPE_LABELS[annotation.type]}${ipaLabel}）：${escapeMarkdown(annotation.explanationZh)}`,
+        prefix,
+        `${prefix}  **例句：** ${escapeMarkdown(annotation.exampleEn)}`
       );
     });
+    lines.push(`${prefix}:::`);
+    return lines.join('\n');
+  }
+
+  _renderReviewBlock(segments, results) {
+    const candidates = [];
+    for (const segment of segments) {
+      for (const annotation of results.get(segment.segmentId) || []) {
+        if (!annotation.learningPromptZh) continue;
+        candidates.push(annotation);
+      }
+    }
+    const prompts = [
+      ...candidates.filter((annotation) => HIGHER_ORDER_TYPES.has(annotation.type)),
+      ...candidates.filter((annotation) => !HIGHER_ORDER_TYPES.has(annotation.type)),
+    ].slice(0, MAX_REVIEW_PROMPTS);
+    if (prompts.length === 0) return '';
+
+    const lines = [
+      '::: english-learning-review',
+      '**学习回顾 · 先不看批注**',
+      '',
+      '用自己的话回答；答不出时，再回看上方对应批注。',
+      '',
+    ];
+    prompts.forEach((annotation, index) => {
+      lines.push(
+        `${index + 1}. **${escapeMarkdown(annotation.quote)}**：${escapeMarkdown(annotation.learningPromptZh)}`
+      );
+    });
+    lines.push(':::');
     return lines.join('\n');
   }
 
@@ -483,10 +565,17 @@ function isEligibleEnglish(text, protectedRanges) {
 
 function validateAnnotationShape(annotation) {
   if (!annotation || typeof annotation !== 'object'
-      || !hasOnlyKeys(annotation, ['quote', 'occurrence', 'type', 'explanationZh', 'exampleEn'])) {
+      || !hasOnlyKeys(annotation, [
+        'quote',
+        'occurrence',
+        'type',
+        'explanationZh',
+        'exampleEn',
+        'learningPromptZh',
+      ])) {
     throw new ValidationError('Annotation must be an object');
   }
-  const { quote, occurrence, type, explanationZh, exampleEn } = annotation;
+  const { quote, occurrence, type, explanationZh, exampleEn, learningPromptZh } = annotation;
   if (typeof quote !== 'string' || quote.length < 1 || quote.length > 120) {
     throw new ValidationError('Annotation quote length is invalid');
   }
@@ -497,10 +586,31 @@ function validateAnnotationShape(annotation) {
   if (typeof explanationZh !== 'string' || explanationZh.length < 1 || explanationZh.length > 240) {
     throw new ValidationError('Annotation explanation length is invalid');
   }
+  if (!/\p{Script=Han}/u.test(explanationZh)) {
+    throw new ValidationError('Annotation explanation must contain Chinese');
+  }
   if (typeof exampleEn !== 'string' || exampleEn.length < 1 || exampleEn.length > 240) {
     throw new ValidationError('Annotation example length is invalid');
   }
-  return { quote, occurrence, type, explanationZh, exampleEn };
+  const exampleWords = exampleEn.match(/[A-Za-z]+(?:[-'][A-Za-z]+)*/g) || [];
+  if (exampleWords.length < 3) {
+    throw new ValidationError('Annotation example must be an English sentence');
+  }
+  if (typeof learningPromptZh !== 'string' || learningPromptZh.length > 160) {
+    throw new ValidationError('Annotation learning prompt length is invalid');
+  }
+  const normalizedPrompt = learningPromptZh.trim();
+  if (normalizedPrompt && !/\p{Script=Han}/u.test(normalizedPrompt)) {
+    throw new ValidationError('Annotation learning prompt must contain Chinese');
+  }
+  return {
+    quote,
+    occurrence,
+    type,
+    explanationZh,
+    exampleEn,
+    learningPromptZh: normalizedPrompt,
+  };
 }
 
 function locateOccurrence(text, quote, occurrence) {

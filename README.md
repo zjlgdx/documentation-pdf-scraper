@@ -160,7 +160,19 @@ primary process or deterministic response validation failure. No API key is stor
 `level` accepts `junior-high`, `high-school`, or `university`; `density` accepts
 `light`, `standard`, or `dense`. Paragraphs, code, links, tables, headings and
 frontmatter remain byte-for-byte unchanged; generated notes are adjacent Markdown
-blockquotes. Valid empty annotations are accepted and do not invoke the fallback.
+fenced divs. Valid empty annotations are accepted and do not invoke the fallback.
+Density is a ceiling rather than a quota. Besides words and phrases, notes may cover
+grammar patterns, discourse logic, register and usage, reusable writing patterns,
+and critical concepts. The model prioritizes comprehension blockers and transferable
+patterns, skips transparent or repeated targets, and writes a contextual Chinese gloss
+plus a new English example sentence.
+
+Validated source anchors use a neutral dotted underline in PDF output so they read as
+“supplemental explanation available,” not as spelling or grammar errors. Adjacent
+annotations and end-of-article active-recall questions use distinct, breakable grayscale
+boxes for A4 and Kindle layouts. At most three why/how/compare/what-if questions are
+shown per article, with higher-order language and concept questions selected first,
+so retrieval practice does not overwhelm the source text.
 
 `includeIPA` is opt-in (`false` by default). `ipaAccent` accepts `uk` (default),
 `us`, or `both`; the rendered note labels each pronunciation as “英式 IPA” or

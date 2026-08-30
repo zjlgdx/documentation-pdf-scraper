@@ -1,7 +1,10 @@
 // src/services/stateManager.js
 import { EventEmitter } from 'events';
 import { createHash } from 'node:crypto';
-import { ANNOTATION_CONTRACT_VERSION } from './annotationContract.js';
+import {
+  ANNOTATION_CONTRACT_VERSION,
+  ANNOTATION_RENDER_VERSION,
+} from './annotationContract.js';
 
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -268,6 +271,7 @@ export class StateManager extends EventEmitter {
       acquisition.annotations = {
         ...acquisition.annotations,
         contractVersion: options.annotationContractVersion || ANNOTATION_CONTRACT_VERSION,
+        renderVersion: options.annotationRenderVersion || ANNOTATION_RENDER_VERSION,
       };
     }
     const identity = createHash('sha256').update(stableJson({ version: 1, urls, acquisition })).digest('hex');

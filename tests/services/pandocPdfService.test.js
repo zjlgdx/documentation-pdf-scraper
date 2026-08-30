@@ -2,7 +2,10 @@ import { describe, it, test, expect, beforeAll, beforeEach, afterAll, afterEach,
 
 // tests/services/pandocPdfService.test.js
 import { PandocPdfService } from '../../src/services/pandocPdfService.js';
-import { pandocHeader } from '../../src/services/pdf/pandocTemplate.js';
+import {
+  englishAnnotationFilterPath,
+  pandocHeader,
+} from '../../src/services/pdf/pandocTemplate.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -94,12 +97,15 @@ describe('PandocPdfService', () => {
 
   it('retains MDX card titles, destinations and static expressions', () => {
     service.normalizer.config.markdownSource = { format: 'mdx' };
-    const markdown = '<Card title="Quickstart" href="/docs/start">Read this guide.</Card>\n\n<Card title="Reference" href="/docs/reference" />\n\nThe default limit is {1000}.';
+    const markdown = '<Card title="Quickstart" href="/docs/start">Read this guide.</Card>\n\n<Card title="Reference" href="/docs/reference" />\n\nThe default limit is {1000}, and <span class="english-annotation-source">under the hood</span> remains traceable.';
     const result = service.normalizer._cleanMarkdownContent(markdown);
     expect(result).toContain('[Quickstart](/docs/start)');
     expect(result).toContain('Read this guide.');
     expect(result).toContain('[Reference](/docs/reference)');
-    expect(result).toContain('The default limit is 1000.');
+    expect(result).toContain('The default limit is 1000, and');
+    expect(result).toContain(
+      '<span class="english-annotation-source">under the hood</span>'
+    );
     expect(service.normalizer._prepareArticleContentForBatch(markdown, 'Guide', 'https://example.com/other/page'))
       .toContain('[Quickstart](https://example.com/docs/start)');
   });
@@ -145,6 +151,8 @@ describe('PandocPdfService', () => {
       expect(args).toContain('-o');
       expect(args).toContain('output.pdf');
       expect(args).toContain('--pdf-engine=xelatex');
+      expect(args).toContain('--lua-filter');
+      expect(args).toContain(englishAnnotationFilterPath);
     });
 
     it('should include format option', () => {
@@ -229,6 +237,26 @@ describe('PandocPdfService', () => {
       expect(header).toContain(
         '\\DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,fontsize=\\small,commandchars=\\\\\\{\\}}'
       );
+    });
+
+    it('should render semantic annotation anchors with a neutral dotted underline', () => {
+      expect(pandocHeader).toContain('\\usepackage[normalem]{ulem}');
+      expect(pandocHeader).toContain('\\newcommand{\\englishannotationsource}[1]');
+      expect(pandocHeader).toContain('line cap=round');
+      expect(pandocHeader).toContain('dash pattern=on 0pt off 1.35pt');
+      expect(pandocHeader).not.toContain('decoration={snake');
+      const filter = fs.readFileSync(englishAnnotationFilterPath, 'utf8');
+      expect(filter).toContain("english-annotation-source");
+      expect(filter).toContain("english-annotation");
+      expect(filter).toContain("english-learning-review");
+    });
+
+    it('should give annotations and active-recall reviews distinct breakable layouts', () => {
+      expect(pandocHeader).toContain('\\usepackage[most]{tcolorbox}');
+      expect(pandocHeader).toContain('\\newtcolorbox{englishannotationbox}');
+      expect(pandocHeader).toContain('\\newtcolorbox{englishreviewbox}');
+      expect(pandocHeader).toContain('breakable');
+      expect(pandocHeader).toContain('fontupper=\\small');
     });
 
     it('should route every normalized broad American IPA symbol through DejaVu Sans', () => {
@@ -1098,6 +1126,19 @@ describe('PandocPdfService', () => {
       expect(result).toContain('export VAR=1');
       // The import outside the fence must be stripped
       expect(result).not.toMatch(/^import Leak/m);
+    });
+
+    it('should preserve Pandoc shorthand fenced divs in MDX source', () => {
+      service.config.markdownSource = { format: 'mdx' };
+      const input = [
+        '::: english-annotation',
+        '**英语批注 · 高中**',
+        '',
+        '- **under the hood**（惯用语）：表示内部实现。',
+        ':::',
+      ].join('\n');
+
+      expect(service.normalizer._stripMdxWithAst(input)).toBe(input);
     });
   });
 

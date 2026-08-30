@@ -1,10 +1,56 @@
 import { fileURLToPath } from 'node:url';
 
 const symbolFontDirectory = fileURLToPath(new URL('../../../assets/fonts/', import.meta.url));
+export const englishAnnotationFilterPath = fileURLToPath(
+  new URL('./englishAnnotationFilter.lua', import.meta.url)
+);
 
 // Shared typography for single-article and batch PDFs. Symbols use a bundled,
 // explicitly selected font; unsupported characters remain verification errors.
 export const pandocHeader = String.raw`\usepackage{fvextra}
+\usepackage[normalem]{ulem}
+\usepackage{tikz}
+% Learning annotations use the conventional neutral dotted underline for text
+% with supplemental meaning. Draw it as a vector path so copy/search text is
+% not polluted by marker glyphs and monochrome output keeps the same meaning.
+\newcommand{\englishannotationsource}[1]{%
+  \bgroup
+  \markoverwith{\lower3.6pt\hbox{%
+    \tikz[baseline]{\draw[line cap=round,dash pattern=on 0pt off 1.35pt,line width=.45pt] (0,0) -- (.55em,0);}%%
+  }}\ULon{#1}%
+}
+\usepackage[most]{tcolorbox}
+\newtcolorbox{englishannotationbox}{%
+  enhanced,
+  breakable,
+  colback=black!2,
+  colframe=black!28,
+  boxrule=.35pt,
+  leftrule=1.2pt,
+  arc=1.2pt,
+  left=6pt,
+  right=6pt,
+  top=4pt,
+  bottom=4pt,
+  before skip=6pt,
+  after skip=8pt,
+  fontupper=\small
+}
+\newtcolorbox{englishreviewbox}{%
+  enhanced,
+  breakable,
+  colback=black!4,
+  colframe=black!38,
+  boxrule=.4pt,
+  arc=1.2pt,
+  left=7pt,
+  right=7pt,
+  top=5pt,
+  bottom=5pt,
+  before skip=10pt,
+  after skip=10pt,
+  fontupper=\small
+}
 \setmonofont{DejaVuSansMono}[Scale=MatchLowercase,BoldFont=DejaVuSansMono-Bold,ItalicFont=DejaVuSansMono-Oblique,BoldItalicFont=DejaVuSansMono-BoldOblique]
 \newfontfamily\scraperSymbols{DocumentationSymbols.ttf}[Path={${symbolFontDirectory}}]
 \newfontfamily\scraperIPA{DejaVu Sans}
