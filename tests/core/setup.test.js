@@ -286,7 +286,7 @@ describe('setup', () => {
         expect.any(Function),
         expect.objectContaining({
           singleton: true,
-          dependencies: ['config', 'logger', 'metadataService', 'processRunner', 'httpResourceService'],
+          dependencies: ['config', 'logger', 'metadataService', 'processRunner', 'httpResourceService', 'pdfLayout'],
           lifecycle: 'singleton',
         })
       );
@@ -336,6 +336,7 @@ describe('setup', () => {
       expect(mockContainer.get).toHaveBeenCalledWith('logger');
       expect(mockContainer.get).toHaveBeenCalledWith('fileService');
       expect(mockContainer.get).toHaveBeenCalledWith('pathService');
+      expect(mockContainer.get).toHaveBeenCalledWith('pdfLayout');
 
       // Verify stats were retrieved
       expect(mockContainer.getStats).toHaveBeenCalled();
@@ -515,10 +516,22 @@ describe('setup', () => {
       )[1];
 
       const { PandocPdfService } = await import('../../src/services/pandocPdfService.js');
-      markdownToPdfServiceFactory(mockConfig, mockLoggerService);
+      const mockPdfLayout = { id: 'reading-5x8' };
+      markdownToPdfServiceFactory(
+        mockConfig,
+        mockLoggerService,
+        'metadataService',
+        mockProcessRunner,
+        'httpResourceService',
+        mockPdfLayout
+      );
       expect(PandocPdfService).toHaveBeenCalledWith({
         config: mockConfig,
         logger: mockLoggerService,
+        metadataService: 'metadataService',
+        processRunner: mockProcessRunner,
+        httpResourceService: 'httpResourceService',
+        layout: mockPdfLayout,
       });
 
       // Test scraper factory

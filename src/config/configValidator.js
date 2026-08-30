@@ -260,6 +260,11 @@ const configSchema = Joi.object({
 
   // PDF生成配置
   pdf: Joi.object({
+    layoutPreset: Joi.string()
+      .pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+      .optional()
+      .description('Trusted PDF layout pack selected by a PDF profile'),
+
     // PDF引擎选择
     engine: Joi.string()
       .valid('puppeteer')

@@ -10,6 +10,8 @@ import path from 'path';
 import fs from 'fs';
 import pLimit from 'p-limit';
 import { HttpResourceService } from './httpResourceService.js';
+import { resolvePdfLayout } from './pdf/layouts/layoutRegistry.js';
+import { PandocLayoutAdapter } from './pdf/layouts/pandocLayoutAdapter.js';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const IMAGE_CONTENT_TYPE_FORMATS = [
@@ -80,6 +82,8 @@ export class PandocPdfService {
     this.pandocBinary = options.pandocBinary || 'pandoc';
     this.latexBinary = options.latexBinary || 'xelatex';
     this.metadataService = options.metadataService || null;
+    this.layout = options.layout === undefined ? resolvePdfLayout(this.config) : options.layout;
+    this.layoutAdapter = this.layout ? new PandocLayoutAdapter(this.layout) : null;
     this.httpResourceService = options.httpResourceService || new HttpResourceService({ config: this.config, logger: this.logger });
   }
 
@@ -463,7 +467,8 @@ export class PandocPdfService {
       `pandoc-header-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tex`
     );
 
-    fs.writeFileSync(headerPath, pandocHeader, 'utf8');
+    const header = this.layoutAdapter?.composeHeader(pandocHeader) || pandocHeader;
+    fs.writeFileSync(headerPath, header, 'utf8');
 
     return headerPath;
   }
@@ -473,8 +478,11 @@ export class PandocPdfService {
       ...(this.config.markdownPdf || {}),
       ...(options || {}),
     };
-    const cjkMainFont = markdownPdfConfig.cjkMainFont || 'Noto Sans CJK SC';
-    const kindleOptions = this._getKindlePandocOptions();
+    const cjkMainFont = this.layout?.typography.bodyFont
+      || markdownPdfConfig.cjkMainFont
+      || 'Noto Sans CJK SC';
+    const kindleOptions = this.layout ? { pdfOptions: {}, variables: [] }
+      : this._getKindlePandocOptions();
 
     const args = [
       inputPath,
@@ -497,15 +505,20 @@ export class PandocPdfService {
       ...(kindleOptions.pdfOptions || {}),
     };
 
-    // 如果指定了格式，添加纸张大小
-    if (pdfOptions.format) {
-      args.push('--variable', `papersize=${pdfOptions.format.toLowerCase()}`);
+    if (this.layoutAdapter) {
+      args.push('--variable', this.layoutAdapter.getGeometryVariable());
+    } else {
+      // 如果指定了格式，添加纸张大小
+      if (pdfOptions.format) {
+        args.push('--variable', `papersize=${pdfOptions.format.toLowerCase()}`);
+      }
+
+      // 如果指定了边距
+      args.push('--variable', this._formatPandocMargin(pdfOptions.margin));
     }
 
-    // 如果指定了边距
-    args.push('--variable', this._formatPandocMargin(pdfOptions.margin));
-
-    kindleOptions.variables.forEach((variable) => {
+    const variables = this.layoutAdapter?.getPandocVariables() || kindleOptions.variables;
+    variables.forEach((variable) => {
       args.push('--variable', variable);
     });
 
@@ -604,6 +617,11 @@ export class PandocPdfService {
       this.logger?.info?.('Starting batch PDF generation', {
         markdownDir,
         outputPath,
+        layout: this.layout ? {
+          id: this.layout.id,
+          version: this.layout.version,
+          fingerprint: this.layout.fingerprint,
+        } : null,
       });
 
       // 1. Get all markdown files sorted by index

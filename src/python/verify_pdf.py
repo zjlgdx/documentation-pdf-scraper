@@ -20,6 +20,17 @@ def contains_text(expected, actual):
             or compact(expected) in compact(re.sub(r"(?<=\w)-\s*\n\s*(?=\w)", "", actual)))
 
 
+def normalize_font_name(name):
+    without_subset = re.sub(r"^[A-Z]{6}\+", "", name or "")
+    return re.sub(r"[^a-z0-9]", "", without_subset.lower())
+
+
+def font_matches(expected, actual):
+    expected_name = normalize_font_name(expected)
+    actual_name = normalize_font_name(actual)
+    return expected_name in actual_name or actual_name in expected_name
+
+
 @contextmanager
 def glyph_height_boxes():
     previous = pymupdf.TOOLS.set_small_glyph_heights()
@@ -49,6 +60,7 @@ def inspect_pdf(pdf_path, expectations=None):
         preview_pages = {0, len(doc) - 1, *toc_pages}
         toc_links = {}
         toc_annotations = 0
+        used_fonts = set()
         for index, page in enumerate(doc):
             for dimension, expected_key in [(page.rect.width, "pageWidthPt"), (page.rect.height, "pageHeightPt")]:
                 if expected_key in expectations and abs(dimension - expectations[expected_key]) > 1:
@@ -57,6 +69,10 @@ def inspect_pdf(pdf_path, expectations=None):
             text = page.get_text()
             texts.append(text)
             words = page.get_text("words", clip=pymupdf.INFINITE_RECT())
+            spans = [span for block in page.get_text("dict").get("blocks", [])
+                     if block.get("type") == 0 for line in block.get("lines", [])
+                     for span in line.get("spans", []) if span.get("text", "").strip()]
+            used_fonts.update(span.get("font", "") for span in spans if span.get("font"))
             if "\ufffd" in text:
                 issues.append({"kind": "replacement_character", "page": index + 1})
             for span in page.get_texttrace():
@@ -69,25 +85,40 @@ def inspect_pdf(pdf_path, expectations=None):
                 preview_pages.add(index)
             if not text.strip() and not images:
                 issues.append({"kind": "empty_page", "page": index + 1})
-            boxes = [(word[:4], word[4]) for word in words]
-            boxes += [(image["bbox"], "image") for image in images]
-            for coords, value in boxes:
+            boxes = [(span["bbox"], span["text"], "text", span.get("size", 0)) for span in spans]
+            boxes += [(image["bbox"], "image", "image", 0) for image in images]
+            for coords, value, kind, font_size in boxes:
                 box = pymupdf.Rect(coords) * page.rotation_matrix
                 left = expectations.get("marginLeftPt", 0)
                 right = page.rect.width - expectations.get("marginRightPt", 0)
                 top = expectations.get("marginTopPt", 0)
                 bottom = page.rect.height - expectations.get("marginBottomPt", 0)
-                # A generated page label is allowed in the footer, not arbitrary text/images.
-                footer = (value == page.get_label() and (box.y0 + box.y1) / 2 >= bottom
-                          and box.y1 <= page.rect.height and box.x0 > page.rect.width * 0.35
-                          and box.x1 < page.rect.width * 0.65)
+                center_y = (box.y0 + box.y1) / 2
+                header = (kind == "text" and expectations.get("headerZoneTopPt") is not None
+                          and expectations["headerZoneTopPt"] <= center_y
+                          <= expectations["headerZoneBottomPt"]
+                          and font_size <= expectations.get("headerMaxFontSizePt", float("inf")))
+                footer_zone = (expectations.get("footerZoneTopPt") is not None
+                               and expectations["footerZoneTopPt"] <= center_y
+                               <= expectations["footerZoneBottomPt"]
+                               and font_size <= expectations.get("footerMaxFontSizePt", float("inf")))
+                # Only the generated page label is permitted in the footer zone.
+                footer = (kind == "text" and value.strip() == page.get_label()
+                          and ((footer_zone and box.y1 <= page.rect.height)
+                               or (expectations.get("footerZoneTopPt") is None
+                                   and center_y >= bottom and box.y1 <= page.rect.height
+                                   and box.x0 > page.rect.width * 0.35
+                                   and box.x1 < page.rect.width * 0.65)))
                 # Word rectangles include font ascenders/descenders, not only ink.
                 # TeX positions the first baseline using topskip; large headings
                 # can extend that rectangle above the text block without clipping.
                 vertical_tolerance = 2 if value == "image" else max(4, box.height * 0.4)
-                if (box.x0 < left - 2 or box.x1 > right + 2 or box.y0 < -2 or box.y1 > page.rect.height + 2
-                        or box.y0 < top - vertical_tolerance
-                        or (box.y1 > bottom + vertical_tolerance and not footer)):
+                outside_page = (box.x0 < -2 or box.x1 > page.rect.width + 2
+                                or box.y0 < -2 or box.y1 > page.rect.height + 2)
+                outside_body = (box.x0 < left - 2 or box.x1 > right + 2
+                                or box.y0 < top - vertical_tolerance
+                                or box.y1 > bottom + vertical_tolerance)
+                if outside_page or (outside_body and not header and not footer):
                     issues.append({"kind": "overflow", "page": index + 1,
                                    "text": value, "box": list(box)})
             for link in page.get_links():
@@ -161,6 +192,15 @@ def inspect_pdf(pdf_path, expectations=None):
                 issues.append({"kind": "toc_targets", "links": len(toc_links), "bookmarks": len(outline)})
         if expectations.get("requireImages") and not any(page.get_image_info() for page in doc):
             issues.append({"kind": "missing_image"})
+        for required_font in expectations.get("requiredFonts", []):
+            expected_font = required_font.get("name") if isinstance(required_font, dict) else required_font
+            embedded_names = (required_font.get("embeddedNames", [expected_font])
+                              if isinstance(required_font, dict) else [expected_font])
+            if not any(font_matches(embedded_name, actual_font)
+                       for embedded_name in embedded_names for actual_font in used_fonts):
+                issues.append({"kind": "missing_font", "font": expected_font})
+        for snippet in expectations.get("previewSnippets", []):
+            preview_pages.update(index for index, text in enumerate(texts) if contains_text(snippet, text))
         # Keep diagnostics bounded even when one defect affects an entire book.
         issue_pages = sorted({issue["page"] - 1 for issue in issues if "page" in issue})
         preview_pages.update(issue_pages[:12])
@@ -171,6 +211,9 @@ def inspect_pdf(pdf_path, expectations=None):
             "previewPages": [i + 1 for i in sorted(preview_pages) if 0 <= i < len(doc)],
             "visualReview": "required",
             "foundTitles": found_titles,
+            "fonts": sorted(used_fonts),
+            "layout": expectations.get("layout"),
+            "previewKinds": expectations.get("previewKinds", []),
         }
 
 

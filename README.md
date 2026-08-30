@@ -49,7 +49,7 @@ make install
 - Pandoc 3.10.2 (the version pinned in CI)
 - Poppler (`brew install poppler`) for PDF verification previews
 - A LaTeX engine that provides `xelatex`
-- DejaVu fonts (`brew install --cask font-dejavu`) and Noto Sans CJK SC
+- DejaVu fonts (`brew install --cask font-dejavu`) plus Noto Sans CJK SC and Noto Serif CJK SC
   for code and Chinese text. A small licensed symbol font is bundled under `assets/fonts`.
 - Cairo (`brew install cairo`) for SVG diagrams in generated PDFs
 
@@ -87,6 +87,19 @@ Run `make pdf-smoke`, `node scripts/pdf-smoke.js A5`, and
 page size, margins, links, body content and TOC destinations; inspect the generated
 PNGs as well. Text bounds use glyph-height boxes with typography tolerance; images
 and physical page boundaries retain strict checks.
+
+For a book-like 5×8 inch reading edition, use the trusted layout pack profile:
+
+```bash
+PDF_PROFILE=reading-5x8 make pdf-smoke
+DOC_TARGET=claude-code-curated PDF_PROFILE=reading-5x8 make run
+```
+
+The pack owns page geometry, fonts, line spacing, running furniture and verification
+expectations as one versioned unit. Do not add direct `fontSize`, `margin`, `format` or
+`markdownPdf.pdfOptions` fields beside `layoutPreset` in the same profile; ambiguous
+layout configuration fails before acquisition. Runs without `layoutPreset` retain the
+existing A4/Kindle behavior.
 
 ### Security boundary
 

@@ -2,23 +2,36 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ValidationError } from '../../utils/errors.js';
+import { lengthToPoints } from './layouts/units.js';
+import { resolvePdfLayout } from './layouts/layoutRegistry.js';
+import { getLayoutVerificationExpectations } from './layouts/layoutVerification.js';
 
 const verifier = fileURLToPath(new URL('../../python/verify_pdf.py', import.meta.url));
 
 function points(value) {
-  const match = String(value).match(/^(\d+(?:\.\d+)?)(mm|cm|in|pt|px)$/);
-  if (!match) throw new ValidationError(`Unsupported PDF margin: ${value}`);
-  return Number(match[1]) * { mm: 72 / 25.4, cm: 72 / 2.54, in: 72, pt: 1, px: 0.75 }[match[2]];
+  try {
+    return lengthToPoints(value, 'PDF margin');
+  } catch (error) {
+    if (error instanceof ValidationError) throw error;
+    throw new ValidationError(`Unsupported PDF margin: ${value}`);
+  }
 }
 
 /** Run the same verification from the application, smoke fixture and CLI. */
-export async function verifyPdf(pdfPath, { config, processRunner, expectations = {}, reportDir }) {
+export async function verifyPdf(pdfPath, {
+  config, processRunner, expectations = {}, reportDir, layout: providedLayout,
+}) {
+  const layout = providedLayout === undefined ? resolvePdfLayout(config) : providedLayout;
   const margin = config.pdf?.kindleOptimized
     ? config.pdf.margin : config.markdownPdf?.pdfOptions?.margin;
   const requireToc = config.markdownPdf?.enabled && config.markdownPdf.batchMode
     && config.markdownPdf.toc !== false;
-  const checks = { requireToc, ...expectations };
-  if (config.markdownPdf?.enabled) {
+  const checks = {
+    requireToc,
+    ...expectations,
+    ...getLayoutVerificationExpectations(layout),
+  };
+  if (config.markdownPdf?.enabled && !layout) {
     checks.marginLeftPt = points(typeof margin === 'object' ? margin.left || '1in' : margin || '1in');
     checks.marginRightPt = points(typeof margin === 'object' ? margin.right || '1in' : margin || '1in');
     checks.marginTopPt = points(typeof margin === 'object' ? margin.top || '1in' : margin || '1in');

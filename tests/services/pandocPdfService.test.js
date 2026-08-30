@@ -322,6 +322,31 @@ describe('PandocPdfService', () => {
       expect(args).not.toContain('papersize=letter');
       expect(args).not.toContain('geometry:margin=20mm');
     });
+
+    it('should let reading-5x8 own geometry and typography instead of inherited A4 fields', () => {
+      const readingService = new PandocPdfService({
+        logger: mockLogger,
+        config: {
+          pdf: { layoutPreset: 'reading-5x8' },
+          markdownPdf: {
+            cjkMainFont: 'Noto Sans CJK SC',
+            pdfOptions: { format: 'A4', margin: '20mm' },
+          },
+        },
+      });
+      const args = readingService._buildPandocArgs('input.md', 'output.pdf');
+      expect(args).toContain('geometry:paperwidth=5in,paperheight=8in,top=0.65in,right=0.5in,bottom=0.65in,left=0.5in,headheight=10pt,headsep=8pt,footskip=24pt');
+      expect(args).toContain('CJKmainfont=Noto Serif CJK SC');
+      expect(args).toContain('classoption=fontsize=10.5pt');
+      expect(args).toContain('linestretch=1.25');
+      expect(args).not.toContain('papersize=a4');
+      expect(args).not.toContain('geometry:margin=20mm');
+      const headerPath = readingService._createPandocHeaderFile(tempDir);
+      const header = fs.readFileSync(headerPath, 'utf8');
+      expect(header).toContain('Layout Pack: reading-5x8@1.0.0');
+      expect(header).toContain('PunctStyle=kaiming');
+      expect(header).toContain('scrlayer-scrpage');
+    });
   });
 
   describe('_concatenateMarkdownFiles', () => {

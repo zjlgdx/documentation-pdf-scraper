@@ -20,6 +20,7 @@ import { PandocPdfService } from '../services/pandocPdfService.js';
 import { Scraper } from './scraper.js';
 import { PythonMergeService } from '../services/PythonMergeService.js';
 import { HttpResourceService } from '../services/httpResourceService.js';
+import { resolvePdfLayout } from '../services/pdf/layouts/layoutRegistry.js';
 
 const SCRAPER_DEPENDENCIES = [
   'config',
@@ -136,6 +137,7 @@ function createPdfStyleService(config) {
 }
 
 function registerContentServices(container) {
+  registerSingleton(container, 'pdfLayout', (config) => resolvePdfLayout(config), ['config']);
   registerSingleton(container, 'httpResourceService', (config, logger) => new HttpResourceService({ config, logger }), ['config', 'logger']);
   registerSingleton(
     container,
@@ -173,14 +175,15 @@ function registerContentServices(container) {
   registerSingleton(
     container,
     'markdownToPdfService',
-    (config, logger, metadataService, processRunner, httpResourceService) => new PandocPdfService({
+    (config, logger, metadataService, processRunner, httpResourceService, pdfLayout) => new PandocPdfService({
       httpResourceService,
       processRunner,
       config,
       logger,
       metadataService,
+      layout: pdfLayout,
     }),
-    ['config', 'logger', 'metadataService', 'processRunner', 'httpResourceService']
+    ['config', 'logger', 'metadataService', 'processRunner', 'httpResourceService', 'pdfLayout']
   );
 }
 
@@ -212,7 +215,7 @@ function registerServices(container, logger) {
 }
 
 async function preloadCriticalServices(container) {
-  for (const serviceName of ['config', 'logger', 'fileService', 'pathService']) {
+  for (const serviceName of ['config', 'logger', 'fileService', 'pathService', 'pdfLayout']) {
     await container.get(serviceName);
   }
 }

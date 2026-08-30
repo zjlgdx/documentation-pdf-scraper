@@ -92,6 +92,37 @@ class VerifyPdfTests(unittest.TestCase):
         self.assertIn("page_size", kinds)
         self.assertIn("overflow", kinds)
 
+    def test_layout_furniture_zones_and_required_fonts_are_checked(self):
+        self.create_pdf()
+        with pymupdf.open(self.path) as doc:
+            doc[1].insert_text((30, 20), "Running header", fontsize=8)
+            doc.saveIncr()
+        expectations = {
+            "marginTopPt": 50,
+            "headerZoneTopPt": 5,
+            "headerZoneBottomPt": 30,
+            "headerMaxFontSizePt": 9,
+            "requiredFonts": [{"name": "Missing Serif", "embeddedNames": ["MissingSerif"]}],
+            "layout": {"id": "reading-5x8", "version": "1.0.0", "fingerprint": "abc"},
+        }
+        result = verify.inspect_pdf(self.path, expectations)
+        self.assertNotIn("overflow", [issue["kind"] for issue in result["issues"]])
+        self.assertIn("missing_font", [issue["kind"] for issue in result["issues"]])
+        self.assertEqual(result["layout"], expectations["layout"])
+
+    def test_oversized_text_is_not_accepted_as_running_furniture(self):
+        self.create_pdf()
+        with pymupdf.open(self.path) as doc:
+            doc[1].insert_text((30, 20), "Not a header", fontsize=12)
+            doc.saveIncr()
+        result = verify.inspect_pdf(self.path, {
+            "marginTopPt": 50,
+            "headerZoneTopPt": 5,
+            "headerZoneBottomPt": 30,
+            "headerMaxFontSizePt": 9,
+        })
+        self.assertIn("overflow", [issue["kind"] for issue in result["issues"]])
+
     def test_toc_title_does_not_prove_body_or_semantic_coverage(self):
         self.create_pdf(empty=True)
         result = verify.inspect_pdf(self.path, {"candidateTitles": ["Guide"], "bodySnippets": ["Guide"]})

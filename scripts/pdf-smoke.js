@@ -43,6 +43,8 @@ try {
   await renderer.generateBatchPdf(markdownDir, outputPath, config.markdownPdf);
   const result = await verifyPdf(outputPath, { config, processRunner,
     expectations: { titles: Object.values(titles), articleTitles: Object.values(titles), groups, minTocPages: 2, requireImages: true,
+      previewSnippets: ['indented_literal = "preserved"', '英语批注', 'Nested child keeps its parent',
+        'environment.longConfigurationPropertyNameForDocumentationTesting'],
       bodySnippets: ['Semantic card title', 'Card body remains readable.', 'The static limit is 1000.',
         '英语批注', 'under the hood', '/ˈbʌndəl/', '/ˈsɜːfɪs/', 'Nested child keeps its parent', '| --- | --- |',
         'indented_literal = "preserved"'] },

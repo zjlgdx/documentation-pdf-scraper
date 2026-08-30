@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ProcessRunner } from '../../src/utils/processRunner.js';
 import { checkToolchain } from '../../src/utils/toolchain.js';
+import { resolvePdfLayout } from '../../src/services/pdf/layouts/layoutRegistry.js';
 
 describe('ProcessRunner', () => {
   const runners = [];
@@ -95,5 +96,26 @@ describe('ProcessRunner', () => {
     expect(result.tools.map((tool) => tool.command)).toEqual(['/selected/python', 'pdftoppm', 'pandoc', 'xelatex']);
     runner.run.mockRejectedValue(new Error('missing renderer'));
     await expect(checkToolchain(config, runner, '24.18.0')).rejects.toThrow('missing renderer');
+  });
+
+  it('probes every layout font through XeLaTeX and names an unavailable font', async () => {
+    const layout = resolvePdfLayout({ pdf: { layoutPreset: 'reading-5x8' } });
+    const config = { python: { executable: '/selected/python' }, markdownPdf: { enabled: true } };
+    const runner = { run: vi.fn().mockResolvedValue({ stdout: 'tool version\n', stderr: '' }) };
+    const result = await checkToolchain(config, runner, '24.18.0', layout);
+    expect(result.fonts).toEqual(layout.verification.requiredFonts.map((font) => font.name));
+    expect(result.layout).toEqual(expect.objectContaining({ id: 'reading-5x8' }));
+    expect(runner.run.mock.calls.filter(([command, args]) =>
+      command === 'xelatex' && args.some((arg) => arg.endsWith('.tex')))).toHaveLength(3);
+
+    runner.run.mockImplementation(async (command, args) => {
+      if (command === 'xelatex' && args.some((arg) => arg.endsWith('font-1.tex'))) {
+        throw new Error('font missing');
+      }
+      return { stdout: 'tool version\n', stderr: '' };
+    });
+    await expect(checkToolchain(config, runner, '24.18.0', layout)).rejects.toThrow(
+      'Noto Sans CJK SC'
+    );
   });
 });

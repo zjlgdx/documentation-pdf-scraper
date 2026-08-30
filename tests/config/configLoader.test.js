@@ -116,6 +116,36 @@ describe('ConfigLoader', () => {
       } finally { vi.unstubAllEnvs(); }
     });
 
+    test('allows a profile layout preset to atomically shadow lower-priority layout fields', async () => {
+      vi.stubEnv('PDF_PROFILE', 'reading-5x8');
+      try {
+        fs.promises.readFile.mockResolvedValueOnce(JSON.stringify({
+          ...mockConfigData,
+          markdownPdf: { pdfOptions: { format: 'A4', margin: '20mm' } },
+        })).mockResolvedValueOnce(JSON.stringify({ pdf: { layoutPreset: 'reading-5x8' } }));
+        const { validateConfig: realValidate } = await vi.importActual('../../src/config/configValidator.js');
+        validateConfig.mockImplementation(realValidate);
+        const config = await configLoader.load();
+        expect(config.pdf.layoutPreset).toBe('reading-5x8');
+        expect(config.markdownPdf.pdfOptions).toEqual({ format: 'A4', margin: '20mm' });
+        expect(config._runtime.layoutSelection).toEqual(expect.objectContaining({
+          preset: 'reading-5x8', sourceIndex: 1,
+        }));
+      } finally { vi.unstubAllEnvs(); }
+    });
+
+    test('rejects direct layout fields beside a layout preset in the same profile', async () => {
+      vi.stubEnv('PDF_PROFILE', 'reading-5x8');
+      try {
+        fs.promises.readFile.mockResolvedValueOnce(JSON.stringify(mockConfigData))
+          .mockResolvedValueOnce(JSON.stringify({
+            pdf: { layoutPreset: 'reading-5x8', fontSize: '16px' },
+          }));
+        await expect(configLoader.load()).rejects.toThrow('pdf.fontSize');
+        expect(validateConfig).not.toHaveBeenCalled();
+      } finally { vi.unstubAllEnvs(); }
+    });
+
     test('应该处理配置文件不存在', async () => {
       const error = new Error('ENOENT');
       error.code = 'ENOENT';

@@ -39,4 +39,20 @@ describe('verifyPdf', () => {
     await expect(verifyPdf('book.pdf', { config, processRunner, reportDir })).rejects.toThrow('PDF overflow');
     expect(processRunner.run).toHaveBeenCalledOnce();
   });
+
+  it('uses layout pack geometry, fonts, and identity instead of inherited A4 options', async () => {
+    config.pdf = { layoutPreset: 'reading-5x8' };
+    config.markdownPdf.pdfOptions = { format: 'A4', margin: '20mm' };
+    await verifyPdf('book.pdf', { config, processRunner, reportDir });
+    const expectations = JSON.parse(await fs.readFile(path.join(reportDir, 'expectations.json')));
+    expect(expectations.pageWidthPt).toBe(360);
+    expect(expectations.pageHeightPt).toBe(576);
+    expect(expectations.marginTopPt).toBeCloseTo(46.8);
+    expect(expectations.requiredFonts.map((font) => font.name)).toEqual([
+      'Noto Serif CJK SC', 'Noto Sans CJK SC', 'DejaVu Sans Mono',
+    ]);
+    expect(expectations.layout).toEqual(expect.objectContaining({
+      id: 'reading-5x8', version: '1.0.0', fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+    }));
+  });
 });
