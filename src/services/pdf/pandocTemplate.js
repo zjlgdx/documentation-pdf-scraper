@@ -60,6 +60,19 @@ export const pandocHeader = String.raw`\usepackage{fvextra}
 \newunicodechar{❌}{{\scraperSymbols\char"274C}}
 \newunicodechar{📊}{{\scraperSymbols\char"1F4CA}}
 \newunicodechar{📁}{{\scraperSymbols\char"1F4C1}}
+\newunicodechar{⏵}{{\scraperSymbols\char"23F5}}
+\newunicodechar{❤}{{\scraperSymbols\char"2764}}
+\newunicodechar{🔴}{{\scraperSymbols\char"1F534}}
+\newunicodechar{🟡}{{\scraperSymbols\char"1F7E1}}
+\newunicodechar{🟣}{{\scraperSymbols\char"1F7E3}}
+\newunicodechar{👀}{{\scraperSymbols\char"1F440}}
+\newunicodechar{👍}{{\scraperSymbols\char"1F44D}}
+\newunicodechar{👎}{{\scraperSymbols\char"1F44E}}
+% Latin Modern omits U+2715; DejaVu Sans (already required for IPA) has it.
+\newunicodechar{✕}{{\scraperIPA ✕}}
+% xeCJK treats U+00B7 as full-width CJK punctuation and sets it as a wide
+% katakana-style dot in Latin text; keep it with the surrounding Latin font.
+\ifdefined\xeCJKDeclareCharClass\xeCJKDeclareCharClass{Default}{"00B7}\fi
 % The normalized broad British and American pronunciations use this IPA symbol set.
 % Keep body typography unchanged and route these glyphs to a portable font.
 \newunicodechar{æ}{{\scraperIPA æ}}
@@ -87,7 +100,7 @@ export const pandocHeader = String.raw`\usepackage{fvextra}
 % Latin Modern text fonts omit U+2248; use the matching glyph from the math font.
 \newfontfamily\scraperMathSymbols{latinmodern-math.otf}
 \newunicodechar{≈}{{\scraperMathSymbols ≈}}
-\fvset{codes*={\catcode"23F8=\active\catcode"2705=\active\catcode"274C=\active\catcode"1F4CA=\active\catcode"1F4C1=\active}}
+\fvset{codes*={\catcode"23F8=\active\catcode"2705=\active\catcode"274C=\active\catcode"1F4CA=\active\catcode"1F4C1=\active\catcode"23F5=\active\catcode"2764=\active\catcode"1F534=\active\catcode"1F7E1=\active\catcode"1F7E3=\active\catcode"1F440=\active\catcode"1F44D=\active\catcode"1F44E=\active}}
 \RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines,breakanywhere,fontsize=\small}
 \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,fontsize=\small,commandchars=\\\{\}}
 \usepackage{xurl}

@@ -1,0 +1,120 @@
+{
+  "rootURL": "https://code.claude.com/docs/en/how-claude-code-works",
+  "baseUrl": "https://code.claude.com/docs/en/",
+  "navLinksSelector": "[id*='sidebar'] a[href*='/docs/en/']",
+  "contentSelector": "#content-area",
+  "allowedDomains": [
+    "code.claude.com"
+  ],
+  "ignoreURLs": [],
+  "markdownSource": {
+    "enabled": true,
+    "urlSuffix": ".md",
+    "format": "mdx"
+  },
+  "sectionEntryPoints": [],
+  "targetSections": [
+    {
+      "title": "Core Concepts and Working Effectively",
+      "entryUrl": "https://code.claude.com/docs/en/how-claude-code-works",
+      "urls": [
+        "https://code.claude.com/docs/en/how-claude-code-works",
+        "https://code.claude.com/docs/en/features-overview",
+        "https://code.claude.com/docs/en/best-practices",
+        "https://code.claude.com/docs/en/memory",
+        "https://code.claude.com/docs/en/prompt-caching",
+        "https://code.claude.com/docs/en/sessions",
+        "https://code.claude.com/docs/en/common-workflows"
+      ]
+    },
+    {
+      "title": "Agents and Parallel Work",
+      "entryUrl": "https://code.claude.com/docs/en/agents",
+      "urls": [
+        "https://code.claude.com/docs/en/agents",
+        "https://code.claude.com/docs/en/sub-agents",
+        "https://code.claude.com/docs/en/agent-view",
+        "https://code.claude.com/docs/en/agent-teams",
+        "https://code.claude.com/docs/en/workflows",
+        "https://code.claude.com/docs/en/cross-session-messaging",
+        "https://code.claude.com/docs/en/worktrees"
+      ]
+    },
+    {
+      "title": "Extending Claude Code",
+      "entryUrl": "https://code.claude.com/docs/en/skills",
+      "urls": [
+        "https://code.claude.com/docs/en/skills",
+        "https://code.claude.com/docs/en/hooks-guide",
+        "https://code.claude.com/docs/en/mcp",
+        "https://code.claude.com/docs/en/artifacts",
+        "https://code.claude.com/docs/en/plugins/overview",
+        "https://code.claude.com/docs/en/plugins/create",
+        "https://code.claude.com/docs/en/plugin-evals",
+        "https://code.claude.com/docs/en/plugins/mods/overview"
+      ]
+    },
+    {
+      "title": "Automation and Review",
+      "entryUrl": "https://code.claude.com/docs/en/goal",
+      "urls": [
+        "https://code.claude.com/docs/en/goal",
+        "https://code.claude.com/docs/en/scheduled-tasks",
+        "https://code.claude.com/docs/en/routines",
+        "https://code.claude.com/docs/en/channels",
+        "https://code.claude.com/docs/en/headless",
+        "https://code.claude.com/docs/en/code-review",
+        "https://code.claude.com/docs/en/ultrareview"
+      ]
+    },
+    {
+      "title": "Permissions, Safety and Security",
+      "entryUrl": "https://code.claude.com/docs/en/permission-modes",
+      "urls": [
+        "https://code.claude.com/docs/en/permission-modes",
+        "https://code.claude.com/docs/en/permissions",
+        "https://code.claude.com/docs/en/sandboxing",
+        "https://code.claude.com/docs/en/auto-mode-config",
+        "https://code.claude.com/docs/en/checkpointing",
+        "https://code.claude.com/docs/en/security-guidance",
+        "https://code.claude.com/docs/en/claude-security"
+      ]
+    },
+    {
+      "title": "Models, Interface and Surfaces",
+      "entryUrl": "https://code.claude.com/docs/en/model-config",
+      "urls": [
+        "https://code.claude.com/docs/en/model-config",
+        "https://code.claude.com/docs/en/fast-mode",
+        "https://code.claude.com/docs/en/advisor",
+        "https://code.claude.com/docs/en/output-styles",
+        "https://code.claude.com/docs/en/interactive-mode",
+        "https://code.claude.com/docs/en/fullscreen",
+        "https://code.claude.com/docs/en/remote-control",
+        "https://code.claude.com/docs/en/desktop",
+        "https://code.claude.com/docs/en/computer-use",
+        "https://code.claude.com/docs/en/chrome"
+      ]
+    },
+    {
+      "title": "Reference and Troubleshooting",
+      "entryUrl": "https://code.claude.com/docs/en/commands",
+      "urls": [
+        "https://code.claude.com/docs/en/commands",
+        "https://code.claude.com/docs/en/costs",
+        "https://code.claude.com/docs/en/debug-your-config",
+        "https://code.claude.com/docs/en/errors",
+        "https://code.claude.com/docs/en/troubleshooting"
+      ]
+    }
+  ],
+  "enablePDFStyleProcessing": true,
+  "navigationStrategy": "load",
+  "urlCollectionWaitUntil": "load",
+  "translation": {
+    "enabled": false,
+    "bilingual": false,
+    "targetLanguage": "Simplified Chinese (简体中文)",
+    "concurrency": 2
+  }
+}
