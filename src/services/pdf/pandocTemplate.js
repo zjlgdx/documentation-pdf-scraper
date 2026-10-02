@@ -4,6 +4,9 @@ const symbolFontDirectory = fileURLToPath(new URL('../../../assets/fonts/', impo
 export const englishAnnotationFilterPath = fileURLToPath(
   new URL('./englishAnnotationFilter.lua', import.meta.url)
 );
+export const linkBreakFilterPath = fileURLToPath(
+  new URL('./linkBreakFilter.lua', import.meta.url)
+);
 
 // Shared typography for single-article and batch PDFs. Symbols use a bundled,
 // explicitly selected font; unsupported characters remain verification errors.
@@ -68,8 +71,13 @@ export const pandocHeader = String.raw`\usepackage{fvextra}
 \newunicodechar{👀}{{\scraperSymbols\char"1F440}}
 \newunicodechar{👍}{{\scraperSymbols\char"1F44D}}
 \newunicodechar{👎}{{\scraperSymbols\char"1F44E}}
-% Latin Modern omits U+2715; DejaVu Sans (already required for IPA) has it.
+% Latin Modern omits these symbols; DejaVu Sans (already required for IPA) has them.
 \newunicodechar{✕}{{\scraperIPA ✕}}
+\newunicodechar{☀}{{\scraperIPA ☀}}
+\newunicodechar{☁}{{\scraperIPA ☁}}
+\newunicodechar{☂}{{\scraperIPA ☂}}
+\newunicodechar{☇}{{\scraperIPA ☇}}
+\newunicodechar{↯}{{\scraperIPA ↯}}
 % xeCJK treats U+00B7 as full-width CJK punctuation and sets it as a wide
 % katakana-style dot in Latin text; keep it with the surrounding Latin font.
 \ifdefined\xeCJKDeclareCharClass\xeCJKDeclareCharClass{Default}{"00B7}\fi
