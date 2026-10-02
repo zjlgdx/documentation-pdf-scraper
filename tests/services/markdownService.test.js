@@ -443,7 +443,7 @@ describe('MarkdownService', () => {
       'When you sign in with ChatGPT, Codex works best with the models listed above.',
     ].join('\n');
 
-    const result = service._normalizeOpenAiModelsPage(
+    const result = service._siteAdapterFor('https://developers.openai.com/codex/models')._normalizeOpenAiModelsPage(
       markdown,
       [
         {
@@ -573,28 +573,49 @@ describe('MarkdownService', () => {
     expect(content).toContain('Body');
   });
 
+  function createExtractionPage(pageUrl) {
+    const contentHandle = { dispose: vi.fn() };
+    const page = {
+      url: vi.fn().mockReturnValue(pageUrl),
+      evaluateHandle: vi.fn(async () => contentHandle),
+      evaluate: vi.fn(async (fn) => (fn.name === 'serializeContentClone'
+        ? { html: '<h1>Title</h1><p><img src="/images/body.png" alt="Body"></p>', svgCount: 0 }
+        : { modelSections: [] })),
+    };
+    return { page, contentHandle };
+  }
+
   test('extractAndConvertPage 应该调用 page.evaluate 并返回 Markdown', async () => {
     const service = new MarkdownService({ logger });
-    const page = {
-      url: vi.fn().mockReturnValue('https://developers.openai.com/codex/intro'),
-      evaluate: vi.fn(async () => ({
-        html: '<h1>Title</h1><p><img src="/images/body.png" alt="Body"></p>',
-        svgCount: 0,
-      })),
-    };
+    const { page, contentHandle } = createExtractionPage('https://developers.openai.com/codex/intro');
 
     const markdown = await service.extractAndConvertPage(page, 'main');
 
-    expect(page.evaluate).toHaveBeenCalledTimes(1);
+    // Site step + generic serialization, both on the same cloned-content handle.
+    expect(page.evaluate).toHaveBeenCalledTimes(2);
+    expect(page.evaluate.mock.calls.map(([, handle]) => handle)).toEqual([contentHandle, contentHandle]);
+    expect(contentHandle.dispose).toHaveBeenCalledOnce();
     expect(markdown).toContain('Title');
     expect(markdown).toContain('![Body](https://developers.openai.com/images/body.png)');
   });
 
+  test('extractAndConvertPage runs no site step on other sites', async () => {
+    const service = new MarkdownService({ logger });
+    const { page, contentHandle } = createExtractionPage('https://example.com/docs');
+
+    await service.extractAndConvertPage(page, 'main');
+
+    expect(page.evaluate).toHaveBeenCalledTimes(1);
+    expect(page.evaluate.mock.calls[0][0].name).toBe('serializeContentClone');
+    expect(contentHandle.dispose).toHaveBeenCalledOnce();
+  });
+
   test('_getOpenAiPagerLinkInfo 和 _shouldStripOpenAiPagerLinkGroup 应该区分真正 pager 与普通 Next 链接', () => {
     const service = new MarkdownService({ logger });
-    const previousInfo = service._getOpenAiPagerLinkInfo('Previous Settings', ['Previous', 'Settings']);
-    const nextInfo = service._getOpenAiPagerLinkInfo('Next Automations', ['Next', 'Automations']);
-    const nextStepsInfo = service._getOpenAiPagerLinkInfo('Next steps', ['Next steps']);
+    const openAiDocs = service._siteAdapterFor('https://developers.openai.com/codex');
+    const previousInfo = openAiDocs._getOpenAiPagerLinkInfo('Previous Settings', ['Previous', 'Settings']);
+    const nextInfo = openAiDocs._getOpenAiPagerLinkInfo('Next Automations', ['Next', 'Automations']);
+    const nextStepsInfo = openAiDocs._getOpenAiPagerLinkInfo('Next steps', ['Next steps']);
 
     expect(previousInfo).toEqual({
       kind: 'previous',
@@ -613,11 +634,11 @@ describe('MarkdownService', () => {
     });
 
     expect(
-      service._shouldStripOpenAiPagerLinkGroup([previousInfo, nextInfo], { requireExact: true })
+      openAiDocs._shouldStripOpenAiPagerLinkGroup([previousInfo, nextInfo], { requireExact: true })
     ).toBe(true);
     expect(
-      service._shouldStripOpenAiPagerLinkGroup([nextStepsInfo], { requireExact: true })
+      openAiDocs._shouldStripOpenAiPagerLinkGroup([nextStepsInfo], { requireExact: true })
     ).toBe(false);
-    expect(service._shouldStripOpenAiPagerLinkGroup([nextStepsInfo])).toBe(false);
+    expect(openAiDocs._shouldStripOpenAiPagerLinkGroup([nextStepsInfo])).toBe(false);
   });
 });
