@@ -18,8 +18,9 @@ The verifier works <span class="english-annotation-source">under the hood</span>
   **例句：** The problem may surface during verification.
 :::
 
-Use `⏸ plan mode on` to pause; ✅ Include and ❌ Exclude must remain visible.
+Use `⏸ plan mode on` or `⏵⏵ accept edits on` to switch modes; ✅ Include and ❌ Exclude must remain visible.
 Offsets such as 0.18 × 56 ≈ 10 px must keep the almost-equal sign.
+Review severities 🔴 Important, 🟡 Nit and 🟣 Pre-existing; ✕ closes a panel, ❤ is a shortcode result, 👀 👍 👎 are reactions, and Week 36 · August keeps its middle dot.
 
 ```text
 project/
