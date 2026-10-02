@@ -20,7 +20,9 @@ The verifier works <span class="english-annotation-source">under the hood</span>
 
 Use `⏸ plan mode on` or `⏵⏵ accept edits on` to switch modes; ✅ Include and ❌ Exclude must remain visible.
 Offsets such as 0.18 × 56 ≈ 10 px must keep the almost-equal sign.
-Review severities 🔴 Important, 🟡 Nit and 🟣 Pre-existing; ✕ closes a panel, ❤ is a shortcode result, 👀 👍 👎 are reactions, and Week 36 · August keeps its middle dot.
+Review severities 🔴 Important, 🟡 Nit and 🟣 Pre-existing; ✕ closes a panel, ❤ is a shortcode result, 👀 👍 👎 are reactions, and Week 36 · August keeps its middle dot. Weather states ☀ ☁ ☂ ☇ ↯ stay visible.
+
+Long link text must wrap: [docs.example.com/en/plugins/mods/reference/events/toolcalls/pretooluse/matchers/examples/advanced](https://docs.example.com/en/plugins/mods/reference).
 
 ```text
 project/

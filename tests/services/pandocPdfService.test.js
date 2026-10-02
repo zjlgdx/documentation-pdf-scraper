@@ -4,6 +4,7 @@ import { describe, it, test, expect, beforeAll, beforeEach, afterAll, afterEach,
 import { PandocPdfService } from '../../src/services/pandocPdfService.js';
 import {
   englishAnnotationFilterPath,
+  linkBreakFilterPath,
   pandocHeader,
 } from '../../src/services/pdf/pandocTemplate.js';
 import fs from 'fs';
@@ -153,6 +154,14 @@ describe('PandocPdfService', () => {
       expect(args).toContain('--pdf-engine=xelatex');
       expect(args).toContain('--lua-filter');
       expect(args).toContain(englishAnnotationFilterPath);
+      expect(args).toContain(linkBreakFilterPath);
+    });
+
+    it('should let long link text wrap after slashes without changing the target', () => {
+      const filter = fs.readFileSync(linkBreakFilterPath, 'utf8');
+      expect(filter).toContain('function Link(element)');
+      expect(filter).toContain("pandoc.RawInline('latex', '\\\\allowbreak{}')");
+      expect(filter).not.toContain('element.target');
     });
 
     it('should include format option', () => {
