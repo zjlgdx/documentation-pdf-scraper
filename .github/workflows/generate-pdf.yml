@@ -15,6 +15,7 @@ on:
           - 53ai
           - claude-blog
           - claude-code-curated
+          - claude-code-highlights
           - claude-dev-blog
       delivery_method:
         description: '分发方式'
