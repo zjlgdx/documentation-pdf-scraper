@@ -201,7 +201,7 @@ jobs:
           fi
 
       - name: Send to Kindle via Gmail
-        uses: dawidd6/action-send-mail@v18
+        uses: dawidd6/action-send-mail@v23
         with:
           server_address: smtp.gmail.com
           server_port: 465
